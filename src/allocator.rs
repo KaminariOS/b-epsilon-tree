@@ -3,7 +3,6 @@ enum PageType {
     BRANCH,
     SUPERBLOCK,
     FILTER,
-
 }
 
 trait Allocator {

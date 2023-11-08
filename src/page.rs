@@ -20,29 +20,27 @@ pub struct Page(Box<PageRaw>);
 impl Deref for Page {
     type Target = PageType;
     fn deref(&self) -> &Self::Target {
-        &self.0.0
+        &self.0 .0
     }
 }
 
 impl DerefMut for Page {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0.0    
+        &mut self.0 .0
     }
 }
 
 impl<'a> From<&'a Page> for &'a [u8] {
     fn from(value: &'a Page) -> Self {
-        &value.0.0
+        &value.0 .0
     }
 }
-
 
 impl<'a> From<&'a mut Page> for &'a mut [u8] {
     fn from(value: &'a mut Page) -> Self {
-        &mut value.0.0
+        &mut value.0 .0
     }
 }
-
 
 #[test]
 fn test_layout() {

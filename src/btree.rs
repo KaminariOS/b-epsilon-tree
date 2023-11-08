@@ -1,11 +1,10 @@
-use crate::{types::*, PAGESIZE, SizedOnDiskImplForComposite};
+use crate::{types::*, SizedOnDiskImplForComposite, PAGESIZE};
 
 type table_index = u16;
 type node_offset = u16;
 type table_entry = node_offset;
 
 const BTREE_SPLIT_THRESHOLD: u64 = PAGESIZE / 2;
-
 
 /**
  * After a split, the free space in the left node may be fragmented.

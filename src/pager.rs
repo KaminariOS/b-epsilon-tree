@@ -1,8 +1,8 @@
 pub type PageId = u64;
-use crate::page::{PAGESIZE, Page};
+use crate::page::{Page, PAGESIZE};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
 use std::io::Write;
+use std::io::{Read, Seek, SeekFrom};
 
 use crate::error::Error;
 
@@ -21,11 +21,11 @@ pub trait Pager: Sized {
 pub struct SimplePager {
     file: File,
     cursor: PageId,
-} 
+}
 
 impl Default for SimplePager {
     fn default() -> Self {
-        Self::new(None, None).unwrap() 
+        Self::new(None, None).unwrap()
     }
 }
 
@@ -41,11 +41,10 @@ impl Pager for SimplePager {
             .write(true)
             .truncate(!cursor.is_some())
             .open(path_str)?;
-        Ok(
-            Self { file: fd, 
-                cursor: cursor.unwrap_or(0),
-            }
-            )
+        Ok(Self {
+            file: fd,
+            cursor: cursor.unwrap_or(0),
+        })
     }
     fn alloc(&mut self) -> Result<PageId, Error> {
         self.cursor += 1;
@@ -65,9 +64,7 @@ impl Pager for SimplePager {
         self.file.flush()?;
         Ok(())
     }
-} 
-
-
+}
 
 #[test]
 fn test_persist() {

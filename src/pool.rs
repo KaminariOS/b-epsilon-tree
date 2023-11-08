@@ -1,21 +1,21 @@
 use lru::LruCache;
 
-use crate::{node::Node, pager::{PageId, Pager, SimplePager}, page::Page};
-
+use crate::{
+    node::Node,
+    page::Page,
+    pager::{PageId, Pager, SimplePager},
+};
 
 struct NodeCache {
-    cache: LruCache<PageId, Node>,   
+    cache: LruCache<PageId, Node>,
     pager: SimplePager,
 }
-
-
 
 impl NodeCache {
     fn get<'a>(&'a mut self, page_id: PageId) -> &'a Node {
         if self.cache.contains(&page_id) {
-            return self.cache.get(&page_id).unwrap()
-        } 
-        else {
+            return self.cache.get(&page_id).unwrap();
+        } else {
             let mut page = Page::default();
             self.pager.read(page_id, &mut page).unwrap();
             self.evict_one_if_full();
@@ -27,9 +27,8 @@ impl NodeCache {
 
     fn get_mut<'a>(&'a mut self, page_id: PageId) -> &'a mut Node {
         if self.cache.contains(&page_id) {
-            return self.cache.get_mut(&page_id).unwrap()
-        } 
-        else {
+            return self.cache.get_mut(&page_id).unwrap();
+        } else {
             let mut page = Page::default();
             self.pager.read(page_id, &mut page).unwrap();
             self.evict_one_if_full();
@@ -51,17 +50,15 @@ impl NodeCache {
     }
 
     fn flush(&mut self) {
-            self.cache.iter_mut().filter(|(_, node)| node.dirty())
-
-            .for_each(|(&p, n)| 
-                      {
-                          let data = (&*n).try_into().unwrap();
-                            // flush from large page id to small id 
-                         self.pager.write(p, &data).unwrap();
-                         n.clear();
-                      }
-                      );
-            self.pager.flush().unwrap();
+        self.cache
+            .iter_mut()
+            .filter(|(_, node)| node.dirty())
+            .for_each(|(&p, n)| {
+                let data = (&*n).try_into().unwrap();
+                // flush from large page id to small id
+                self.pager.write(p, &data).unwrap();
+                n.clear();
+            });
+        self.pager.flush().unwrap();
     }
 }
-
