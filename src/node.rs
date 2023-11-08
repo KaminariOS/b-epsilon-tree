@@ -2,25 +2,29 @@ use std::collections::BTreeMap;
 
 use crate::page::Page;
 use crate::error::Error;
-use crate::types::{OnDiskKey, OnDiskValue};
+use crate::types::{OnDiskKey, OnDiskValue, MessageType};
 
 struct LeafNode {
-
+    map: BTreeMap<OnDiskKey, OnDiskValue>
 }
 
 
 struct InternelNode {
-    map: BTreeMap<OnDiskKey, OnDiskValue>
+    pivots: Vec<OnDiskKey>,
+    msg_buffer: BTreeMap<OnDiskKey, (OnDiskValue, MessageType)> 
 }
 
 enum NodeType {
     Leaf(LeafNode),
-    Internel(InternelNode)
+    Internel(InternelNode),
+    Test
 }
 
 pub struct Node {
+    node_inner: NodeType,
     dirty: bool,
     root: bool,
+    epsilon: f32,
 }
 
 impl Node {
@@ -44,14 +48,14 @@ impl Node {
 impl TryFrom<&Page> for Node {
     type Error = Error;
     fn try_from(value: &Page) -> Result<Self, Self::Error> {
-        Ok(Node { dirty: false, root: true })         
+        Ok(Node { dirty: false, root: true, node_inner: NodeType::Test, epsilon: 0. })         
     }    
 }
 
 impl TryFrom<Page> for Node {
     type Error = Error;
     fn try_from(value: Page) -> Result<Self, Self::Error> {
-        Ok(Node { dirty: false, root: true })         
+        Ok(Node { dirty: false, root: true, node_inner: NodeType::Test, epsilon: 0. })         
     }    
 }
 

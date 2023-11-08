@@ -10,8 +10,11 @@ pub type OndiskFlags = u8;
 pub type OndiskMessageLength = u16;
 pub type PageOffset = usize;
 
-pub trait SizedOnDisk {
+pub trait SizedOnDisk: Clone {
    fn size(&self) -> PageOffset;
+   fn is_packed() -> Option<usize> {
+        None        
+   }
 }
 
 #[macro_export]
@@ -20,6 +23,14 @@ macro_rules! SizedOnDiskImplForPrimitive {
         impl SizedOnDisk for $primitive_ty {
             fn size(&self) -> PageOffset {
                 size_of::<Self>() as PageOffset
+            }
+
+            fn is_packed() -> Option<usize> {
+                #[cfg(target_endian = "little")]
+                return Some(size_of::<Self>());
+
+                #[cfg(not(target_endian = "little"))]
+                return None;
             }
         }
     };
@@ -39,6 +50,7 @@ macro_rules! SizedOnDiskImplForComposite {
             }
         ) => {
             $(#[$($attrss)*])*
+            #[derive(Clone)]
             $vis struct $name {
                 $(
                     $(#[$($attrss_f)*])*
@@ -53,12 +65,13 @@ macro_rules! SizedOnDiskImplForComposite {
         }
 }
 
-pub struct BytesOnDisk<T: Serializable, L: num::PrimInt + Serializable> {
+#[derive(Clone)]
+pub struct VectorOnDisk<T: Serializable, L: num::PrimInt + Serializable> {
     elements: Vec<T>,
     _p: std::marker::PhantomData<L>
 }
 
-impl<T: Serializable, L: num::PrimInt + Serializable> BytesOnDisk<T, L> {
+impl<T: Serializable, L: num::PrimInt + Serializable> VectorOnDisk<T, L> {
     fn new(elements: Vec<T>, _u: L) -> Self {
         Self {
             elements,
@@ -67,20 +80,20 @@ impl<T: Serializable, L: num::PrimInt + Serializable> BytesOnDisk<T, L> {
     }
 }
 
-impl<T: Serializable, U: num::PrimInt + Serializable> Deref for BytesOnDisk<T, U> {
+impl<T: Serializable, U: num::PrimInt + Serializable> Deref for VectorOnDisk<T, U> {
     type Target = Vec<T>; 
     fn deref(&self) -> &Self::Target {
         &self.elements
     }
 }
 
-impl<T: Serializable, U: num::PrimInt + Serializable> DerefMut for BytesOnDisk<T, U> {
+impl<T: Serializable, U: num::PrimInt + Serializable> DerefMut for VectorOnDisk<T, U> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.elements
     }
 }
 
-impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for BytesOnDisk<T, L> {
+impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for VectorOnDisk<T, L> {
     fn size(&self) -> PageOffset {
         (size_of::<L>() + self.elements.len() * size_of::<T>()) as PageOffset
     }
@@ -91,12 +104,12 @@ impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for BytesOnDis
 SizedOnDiskImplForComposite!{
     pub struct OnDiskKey {
         // pub flags: OndiskFlags,
-        pub bytes: BytesOnDisk<u8, OndiskKeyLength>
+        pub bytes: VectorOnDisk<u8, OndiskKeyLength>
     }
 }
 
 impl Deref for OnDiskKey {
-    type Target = BytesOnDisk<u8, OndiskKeyLength>;
+    type Target = VectorOnDisk<u8, OndiskKeyLength>;
     fn deref(&self) -> &Self::Target {
         &self.bytes
     }
@@ -111,13 +124,13 @@ impl DerefMut for OnDiskKey {
 SizedOnDiskImplForComposite!{
     pub struct OnDiskValue {
         // pub flags: OndiskFlags,
-        pub bytes: BytesOnDisk<u8, OndiskValueLength>
+        pub bytes: VectorOnDisk<u8, OndiskValueLength>
     }
 }
 
 
 impl Deref for OnDiskValue {
-    type Target = BytesOnDisk<u8, OndiskValueLength>;
+    type Target = VectorOnDisk<u8, OndiskValueLength>;
     fn deref(&self) -> &Self::Target {
         &self.bytes
     }
@@ -139,7 +152,7 @@ SizedOnDiskImplForComposite!{
     pub struct OndiskTuple {
         key: OnDiskKey,
         flags: OndiskFlags,
-        message: BytesOnDisk<u8, OndiskMessageLength>,
+        message: VectorOnDisk<u8, OndiskMessageLength>,
     }
 }
 
@@ -168,6 +181,24 @@ impl SizedOnDisk for MessageType {
 }
 
 
+impl Serializable for bool {
+    fn serialize(&self, destination: &mut [u8]) {
+        (*self as u8).serialize(destination)
+    }
+
+    fn deserialize(src: &[u8]) -> Self {
+        let num = u8::deserialize(src);
+        num != 0
+    }
+}
+
+impl SizedOnDisk for bool {
+    fn size(&self) -> PageOffset {
+        1 
+    }
+}
+
+
 
 SizedOnDiskImplForComposite! {
     pub struct Message {
@@ -183,11 +214,11 @@ pub trait Serializable: SizedOnDisk {
 }
 
 
-macro_rules! SerializeImplForInteger {
+macro_rules! SerializeImplForNumber {
     ($primitive_ty:ty) => {
         impl Serializable for $primitive_ty {
             fn serialize(&self, destination: &mut [u8]) {
-                let bytes = self.to_be_bytes();
+                let bytes = self.to_le_bytes();
                 
                 destination[..bytes.len()].copy_from_slice(&bytes);
             }
@@ -195,7 +226,7 @@ macro_rules! SerializeImplForInteger {
                 const SIZE: usize = size_of::<$primitive_ty>();
                 let mut bytes = [0; SIZE];
                 bytes.copy_from_slice(&src[0..SIZE]);
-                Self::from_be_bytes(bytes)
+                Self::from_le_bytes(bytes)
             }
         }
         
@@ -226,28 +257,36 @@ macro_rules! SerializeImplForInteger {
 //     }
 // }
 
-SerializeImplForInteger!(u8);
-SerializeImplForInteger!(i8);
-SerializeImplForInteger!(u16);
-SerializeImplForInteger!(i16);
-SerializeImplForInteger!(u32);
-SerializeImplForInteger!(i32);
-SerializeImplForInteger!(u64);
-SerializeImplForInteger!(PageOffset);
+SerializeImplForNumber!(u8);
+SerializeImplForNumber!(i8);
+SerializeImplForNumber!(u16);
+SerializeImplForNumber!(i16);
+SerializeImplForNumber!(u32);
+SerializeImplForNumber!(i32);
+SerializeImplForNumber!(u64);
+SerializeImplForNumber!(PageOffset);
+SerializeImplForNumber!(f32);
 
-impl<T: Serializable + num::PrimInt, L: Serializable + num::PrimInt> Serializable for BytesOnDisk<T, L> {
+impl<T: Serializable, L: Serializable + num::PrimInt> Serializable for VectorOnDisk<T, L> {
     fn serialize(&self, destination: &mut [u8]) {
         let mut cursor: usize = 0;
         let len = self.len();
         let l = L::from(len).unwrap(); 
         l.serialize(&mut destination[cursor..]);
         cursor += l.size() as usize;
-        let total_bytes = self.size() as usize - size_of::<L>();
-        let slice = unsafe {
-             core::slice::from_raw_parts(self.as_slice() as *const [T] as *const u8, total_bytes)
-        };
-        destination[cursor..cursor + total_bytes].copy_from_slice(slice);
-        cursor += total_bytes;
+        if let Some(size) = T::is_packed() {
+            let total_bytes = size * len;
+            let slice = unsafe {
+                 core::slice::from_raw_parts(self.as_slice() as *const [T] as *const u8, total_bytes)
+            };
+            destination[cursor..cursor + total_bytes].copy_from_slice(slice);
+            cursor += total_bytes;
+        } else {
+            self.iter().for_each(|i| {
+                i.serialize(&mut destination[cursor..]);
+                cursor += i.size();
+            });
+        }
         debug_assert_eq!(cursor as PageOffset, self.size());
     }
 
@@ -257,12 +296,22 @@ impl<T: Serializable + num::PrimInt, L: Serializable + num::PrimInt> Serializabl
         let len1 = L::deserialize(&destination[cursor..]); 
         let len = <usize as num::NumCast>::from(len1).unwrap();
         cursor += l_size;
-        let total_bytes = len * size_of::<T>();
-        let v = (unsafe {
-            core::slice::from_raw_parts(&destination[cursor..cursor + total_bytes] as *const [u8] as *const T, len)
-        }).to_vec();
-        let bytes_on_disk = BytesOnDisk::new(v, len1);
-        cursor += total_bytes;
+        let bytes_on_disk;
+        if let Some(size) = T::is_packed() {
+            let total_bytes = len * size;
+            let v = (unsafe {
+                core::slice::from_raw_parts(&destination[cursor..cursor + total_bytes] as *const [u8] as *const T, len)
+            }).to_vec();
+            bytes_on_disk = VectorOnDisk::new(v, len1);
+            cursor += total_bytes;
+        } else {
+            let v: Vec<_> = (0..len).map(|_| {
+                let e = T::deserialize(&destination[cursor..]);
+                cursor += e.size();
+                e
+            }).collect();
+            bytes_on_disk = VectorOnDisk::new(v, len1);
+        }
         debug_assert_eq!(cursor as PageOffset, bytes_on_disk.size());
         bytes_on_disk
     }
@@ -275,7 +324,7 @@ impl Serializable for OnDiskKey {
 
     fn deserialize(src: &[u8]) -> Self {
         Self {
-            bytes: BytesOnDisk::deserialize(src)
+            bytes: VectorOnDisk::deserialize(src)
         }
     }
 }
@@ -288,7 +337,7 @@ impl Serializable for OnDiskValue {
 
     fn deserialize(src: &[u8]) -> Self {
         Self {
-            bytes: BytesOnDisk::deserialize(src)
+            bytes: VectorOnDisk::deserialize(src)
         }
     }
 }
@@ -338,16 +387,16 @@ fn endian() {
     a.serialize(&mut bytes);
     assert_eq!(i32::deserialize(&bytes), a);
 
-    let k = BytesOnDisk::new(  vec![1], 1u8);
+    let k = VectorOnDisk::new(  vec![1], 1u8);
 }
 
 #[test]
 fn test_serialization() {
     let a: Vec<_> = (-1000..1000).collect();
-    let bs = BytesOnDisk::new(a, 1u16);
+    let bs = VectorOnDisk::new(a, 1u16);
     let mut b = vec![0u8; 84000];
     bs.serialize(&mut b);
-    let bs1: BytesOnDisk<i32, u16> = BytesOnDisk::deserialize(&b);
+    let bs1: VectorOnDisk<i32, u16> = VectorOnDisk::deserialize(&b);
     assert_eq!(bs.elements, bs1.elements);
 }
 
