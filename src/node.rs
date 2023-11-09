@@ -2,15 +2,15 @@ use crate::types::{MessageData, Serializable, VectorOnDisk};
 use std::collections::BTreeMap;
 
 use crate::error::Error;
-use crate::page::Page;
+use crate::page::{Page, PAGESIZE};
 use crate::pager::PageId;
 use crate::types::{OnDiskKey, OnDiskValue, PageOffset, SizedOnDisk};
+use ser_derive::SizedOnDisk;
 pub type ChildId = PageId;
 
-SizedOnDiskImplForComposite! {
+#[derive(SizedOnDisk, Clone)]
 struct LeafNode {
     map: BTreeMap<OnDiskKey, OnDiskValue>,
-}
 }
 
 impl Serializable for LeafNode {
@@ -28,13 +28,18 @@ impl Serializable for LeafNode {
 
 type PivotsLength = u16;
 
-SizedOnDiskImplForComposite! {
+#[derive(SizedOnDisk, Clone)]
 struct InternelNode {
     pivots: VectorOnDisk<OnDiskKey, PivotsLength>,
     children: VectorOnDisk<ChildId, PivotsLength>,
     msg_buffer: BTreeMap<OnDiskKey, MessageData>,
     epsilon: f32,
 }
+
+impl InternelNode {
+    pub fn is_msg_buffer_full(&self) -> bool {
+        false
+    }
 }
 
 impl Serializable for InternelNode {
@@ -106,12 +111,10 @@ impl Serializable for NodeType {
     }
 }
 
-SizedOnDiskImplForComposite! {
-#[derive(Default)]
+#[derive(Default, SizedOnDisk, Clone)]
 struct NodeCommon {
     root: bool,
     dirty: bool,
-}
 }
 
 impl Serializable for NodeCommon {

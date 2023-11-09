@@ -9,10 +9,6 @@ use crate::error::Error;
 pub trait Pager: Sized {
     const DEFAULT_PATH: &'static str = "/tmp/dbtest";
     fn new(path: Option<String>, cursor: Option<PageId>) -> Result<Self, Error>;
-    fn alloc(&mut self) -> Result<PageId, Error>;
-    fn dealloc(&mut self, _page_id: PageId) -> Result<(), Error> {
-        unimplemented!()
-    }
     fn read(&mut self, page_id: PageId, page: &mut Page) -> Result<(), Error>;
     fn write(&mut self, page_id: PageId, data: &Page) -> Result<(), Error>;
     fn flush(&mut self) -> Result<(), Error>;
@@ -20,7 +16,6 @@ pub trait Pager: Sized {
 
 pub struct SimplePager {
     file: File,
-    cursor: PageId,
 }
 
 impl Default for SimplePager {
@@ -43,13 +38,9 @@ impl Pager for SimplePager {
             .open(path_str)?;
         Ok(Self {
             file: fd,
-            cursor: cursor.unwrap_or(0),
         })
     }
-    fn alloc(&mut self) -> Result<PageId, Error> {
-        self.cursor += 1;
-        Ok(self.cursor)
-    }
+
     fn read(&mut self, page_id: PageId, page: &mut Page) -> Result<(), Error> {
         self.file.seek(SeekFrom::Start(page_id * PAGESIZE))?;
         self.file.read_exact(page.into())?;

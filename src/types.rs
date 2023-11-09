@@ -1,7 +1,8 @@
 use core::mem::size_of;
-use core::ops::{Deref, DerefMut};
+use derive_more::{Deref, DerefMut};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+use ser_derive::SizedOnDisk;
 use std::collections::BTreeMap;
 
 pub type OndiskKeyLength = u16;
@@ -43,38 +44,38 @@ macro_rules! SizedOnDiskImplForPrimitive {
     };
 }
 
-#[macro_export]
-macro_rules! SizedOnDiskImplForComposite {
-        (
-            $(#[$($attrss:tt)*])*
-            $vis:vis struct $name:ident {
-
-                $(
-
-                    $(#[$($attrss_f:tt)*])*
-                    $field_vis:vis $field_name:ident: $field_type:ty),*$(,)?
-            }
-        ) => {
-            $(#[$($attrss)*])*
-            #[derive(Clone)]
-            $vis struct $name {
-                $(
-                    $(#[$($attrss_f)*])*
-                    $field_vis $field_name: $field_type,)*
-            }
-
-            impl SizedOnDisk for $name {
-                fn size(&self) -> PageOffset {
-                    0 $( + self.$field_name.size())*
-                }
-            }
-        }
-}
+// #[macro_export]
+// macro_rules! SizedOnDiskImplForComposite {
+//         (
+//             $(#[$($attrss:tt)*])*
+//             $vis:vis struct $name:ident {
+//
+//                 $(
+//
+//                     $(#[$($attrss_f:tt)*])*
+//                     $field_vis:vis $field_name:ident: $field_type:ty),*$(,)?
+//             }
+//         ) => {
+//             $(#[$($attrss)*])*
+//             #[derive(Clone)]
+//             $vis struct $name {
+//                 $(
+//                     $(#[$($attrss_f)*])*
+//                     $field_vis $field_name: $field_type,)*
+//             }
+//
+//             impl SizedOnDisk for $name {
+//                 fn size(&self) -> PageOffset {
+//                     0 $( + self.$field_name.size())*
+//                 }
+//             }
+//         }
+// }
 
 #[macro_export]
 macro_rules! serialize {
     ($s:expr, $des: ident, $cursor:ident) => {
-        $s.serialize(&mut $des[$cursor..]);
+        $s.serialize(&mut $des[$cursor..$s.size()]);
         $cursor += $s.size();
     };
 }
@@ -88,8 +89,10 @@ macro_rules! deserialize {
     }};
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Deref, DerefMut)]
 pub struct VectorOnDisk<T: Serializable, L: num::PrimInt + Serializable> {
+    #[deref]
+    #[deref_mut]
     elements: Vec<T>,
     _p: std::marker::PhantomData<L>,
 }
@@ -103,18 +106,6 @@ impl<T: Serializable, L: num::PrimInt + Serializable> VectorOnDisk<T, L> {
     }
 }
 
-impl<T: Serializable, U: num::PrimInt + Serializable> Deref for VectorOnDisk<T, U> {
-    type Target = Vec<T>;
-    fn deref(&self) -> &Self::Target {
-        &self.elements
-    }
-}
-
-impl<T: Serializable, U: num::PrimInt + Serializable> DerefMut for VectorOnDisk<T, U> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.elements
-    }
-}
 
 impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for VectorOnDisk<T, L> {
     fn size(&self) -> PageOffset {
@@ -122,12 +113,12 @@ impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for VectorOnDi
     }
 }
 
-SizedOnDiskImplForComposite! {
-    #[derive(PartialEq, Eq, Ord, PartialOrd)]
-    pub struct OnDiskKey {
-        // pub flags: OndiskFlags,
-        pub bytes: VectorOnDisk<u8, OndiskKeyLength>
-    }
+#[derive(PartialEq, Eq, Ord, PartialOrd, DerefMut, Clone, Deref, SizedOnDisk)]
+pub struct OnDiskKey {
+    // pub flags: OndiskFlags,
+    #[deref]
+    #[deref_mut]
+    pub bytes: VectorOnDisk<u8, OndiskKeyLength>
 }
 
 impl OnDiskKey {
@@ -138,24 +129,10 @@ impl OnDiskKey {
     }
 }
 
-impl Deref for OnDiskKey {
-    type Target = VectorOnDisk<u8, OndiskKeyLength>;
-    fn deref(&self) -> &Self::Target {
-        &self.bytes
-    }
-}
-
-impl DerefMut for OnDiskKey {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.bytes
-    }
-}
-
-SizedOnDiskImplForComposite! {
-    pub struct OnDiskValue {
-        // pub flags: OndiskFlags,
-        pub bytes: VectorOnDisk<u8, OndiskValueLength>
-    }
+#[derive(SizedOnDisk, Clone)]
+pub struct OnDiskValue {
+    // pub flags: OndiskFlags,
+    pub bytes: VectorOnDisk<u8, OndiskValueLength>
 }
 
 impl OnDiskValue {
@@ -163,19 +140,6 @@ impl OnDiskValue {
         Self {
             bytes: VectorOnDisk::new(val, 1 as OndiskValueLength),
         }
-    }
-}
-
-impl Deref for OnDiskValue {
-    type Target = VectorOnDisk<u8, OndiskValueLength>;
-    fn deref(&self) -> &Self::Target {
-        &self.bytes
-    }
-}
-
-impl DerefMut for OnDiskValue {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.bytes
     }
 }
 
@@ -188,12 +152,11 @@ impl<K: SizedOnDisk, V: SizedOnDisk> SizedOnDisk for BTreeMap<K, V> {
     }
 }
 
-SizedOnDiskImplForComposite! {
-    pub struct OndiskTuple {
-        key: OnDiskKey,
-        flags: OndiskFlags,
-        message: VectorOnDisk<u8, OndiskMessageLength>,
-    }
+#[derive(SizedOnDisk, Clone)]
+pub struct OndiskTuple {
+    key: OnDiskKey,
+    flags: OndiskFlags,
+    message: VectorOnDisk<u8, OndiskMessageLength>,
 }
 
 #[derive(FromPrimitive, Clone, Copy)]
@@ -246,11 +209,10 @@ impl SizedOnDisk for bool {
     }
 }
 
-SizedOnDiskImplForComposite! {
+#[derive(SizedOnDisk, Clone)]
 pub struct MessageData {
         val: OnDiskValue,
         ty: MessageType,
-}
 }
 
 impl Serializable for MessageData {
@@ -272,11 +234,10 @@ impl Serializable for MessageData {
     }
 }
 
-SizedOnDiskImplForComposite! {
-    pub struct Message {
-        key: OnDiskKey,
-        data: MessageData,
-    }
+#[derive(SizedOnDisk, Clone)]
+pub struct Message {
+    key: OnDiskKey,
+    data: MessageData,
 }
 
 pub trait Serializable: SizedOnDisk {
