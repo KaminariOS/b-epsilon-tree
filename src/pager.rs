@@ -36,9 +36,7 @@ impl Pager for SimplePager {
             .write(true)
             .truncate(!cursor.is_some())
             .open(path_str)?;
-        Ok(Self {
-            file: fd,
-        })
+        Ok(Self { file: fd })
     }
 
     fn read(&mut self, page_id: PageId, page: &mut Page) -> Result<(), Error> {

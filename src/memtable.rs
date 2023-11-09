@@ -1,7 +1,7 @@
-use crate::types::{MessageData, OnDiskKey};
-use std::collections::BTreeMap;
 use crate::types::SizedOnDisk;
+use crate::types::{MessageData, OnDiskKey};
 use derive_more::{Deref, DerefMut};
+use std::collections::BTreeMap;
 
 #[derive(Deref, DerefMut)]
 pub struct Memtable {
@@ -16,7 +16,5 @@ impl Memtable {
         self.inner.size() >= self.max_disk_size
     }
 
-    fn flush(&mut self) {
-    }
+    fn flush(&mut self) {}
 }
-

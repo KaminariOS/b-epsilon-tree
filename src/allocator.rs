@@ -8,12 +8,11 @@ enum PageType {
 
 trait PageAllocator {
     fn alloc(&mut self) -> PageId;
-    fn dealloc(&mut self, _addr: PageId) {
-    }
+    fn dealloc(&mut self, _addr: PageId) {}
 }
 
 struct SimpleAllocator {
-    counter: PageId
+    counter: PageId,
 }
 
 impl PageAllocator for SimpleAllocator {

@@ -106,7 +106,6 @@ impl<T: Serializable, L: num::PrimInt + Serializable> VectorOnDisk<T, L> {
     }
 }
 
-
 impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for VectorOnDisk<T, L> {
     fn size(&self) -> PageOffset {
         (size_of::<L>() + self.elements.len() * size_of::<T>()) as PageOffset
@@ -118,7 +117,7 @@ pub struct OnDiskKey {
     // pub flags: OndiskFlags,
     #[deref]
     #[deref_mut]
-    pub bytes: VectorOnDisk<u8, OndiskKeyLength>
+    pub bytes: VectorOnDisk<u8, OndiskKeyLength>,
 }
 
 impl OnDiskKey {
@@ -132,7 +131,7 @@ impl OnDiskKey {
 #[derive(SizedOnDisk, Clone)]
 pub struct OnDiskValue {
     // pub flags: OndiskFlags,
-    pub bytes: VectorOnDisk<u8, OndiskValueLength>
+    pub bytes: VectorOnDisk<u8, OndiskValueLength>,
 }
 
 impl OnDiskValue {
@@ -211,8 +210,8 @@ impl SizedOnDisk for bool {
 
 #[derive(SizedOnDisk, Clone)]
 pub struct MessageData {
-        val: OnDiskValue,
-        ty: MessageType,
+    val: OnDiskValue,
+    ty: MessageType,
 }
 
 impl Serializable for MessageData {

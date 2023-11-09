@@ -12,7 +12,7 @@ mod node;
 mod page;
 mod pager;
 mod pool;
-mod wal; 
+mod wal;
 
 use page::PAGESIZE;
 

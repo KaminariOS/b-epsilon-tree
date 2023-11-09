@@ -12,9 +12,7 @@ pub struct Betree {
 }
 
 impl Betree {
-    pub fn insert(&mut self, key: Vec<u8>, val: Vec<u8>) {
-        
-    }
+    pub fn insert(&mut self, key: Vec<u8>, val: Vec<u8>) {}
 
     pub fn upsert(&mut self, key: Vec<u8>, val: Vec<u8>) {}
 
