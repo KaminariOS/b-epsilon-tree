@@ -8,12 +8,19 @@ pub type OndiskKeyLength = u16;
 pub type OndiskValueLength = u16;
 pub type OndiskFlags = u8;
 pub type OndiskMessageLength = u16;
+pub type OndiskMapLength = u16;
 pub type PageOffset = usize;
 
 pub trait SizedOnDisk: Clone {
     fn size(&self) -> PageOffset;
     fn is_packed() -> Option<usize> {
         None
+    }
+}
+
+impl SizedOnDisk for String {
+    fn size(&self) -> PageOffset {
+        self.len() + size_of::<OndiskKeyLength>()
     }
 }
 
@@ -64,7 +71,24 @@ macro_rules! SizedOnDiskImplForComposite {
         }
 }
 
-#[derive(Clone)]
+#[macro_export]
+macro_rules! serialize {
+    ($s:expr, $des: ident, $cursor:ident) => {
+        $s.serialize(&mut $des[$cursor..]);
+        $cursor += $s.size();
+    };
+}
+
+#[macro_export]
+macro_rules! deserialize {
+    ($s:ty, $src: ident, $cursor:ident) => {{
+        let v = <$s>::deserialize(&$src[$cursor..]);
+        $cursor += v.size();
+        v
+    }};
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VectorOnDisk<T: Serializable, L: num::PrimInt + Serializable> {
     elements: Vec<T>,
     _p: std::marker::PhantomData<L>,
@@ -99,9 +123,18 @@ impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for VectorOnDi
 }
 
 SizedOnDiskImplForComposite! {
+    #[derive(PartialEq, Eq, Ord, PartialOrd)]
     pub struct OnDiskKey {
         // pub flags: OndiskFlags,
         pub bytes: VectorOnDisk<u8, OndiskKeyLength>
+    }
+}
+
+impl OnDiskKey {
+    fn new(key: Vec<u8>) -> Self {
+        Self {
+            bytes: VectorOnDisk::new(key, 0 as OndiskKeyLength),
+        }
     }
 }
 
@@ -125,6 +158,14 @@ SizedOnDiskImplForComposite! {
     }
 }
 
+impl OnDiskValue {
+    pub fn new(val: Vec<u8>) -> Self {
+        Self {
+            bytes: VectorOnDisk::new(val, 1 as OndiskValueLength),
+        }
+    }
+}
+
 impl Deref for OnDiskValue {
     type Target = VectorOnDisk<u8, OndiskValueLength>;
     fn deref(&self) -> &Self::Target {
@@ -140,7 +181,10 @@ impl DerefMut for OnDiskValue {
 
 impl<K: SizedOnDisk, V: SizedOnDisk> SizedOnDisk for BTreeMap<K, V> {
     fn size(&self) -> PageOffset {
-        self.iter().map(|(k, v)| k.size() + v.size()).sum()
+        self.iter()
+            .map(|(k, v)| k.size() + v.size())
+            .sum::<PageOffset>()
+            + size_of::<OndiskMapLength>()
     }
 }
 
@@ -170,6 +214,15 @@ impl Serializable for MessageType {
     }
 }
 
+impl MessageData {
+    pub fn new(ty: MessageType, val: Vec<u8>) -> Self {
+        Self {
+            ty,
+            val: OnDiskValue::new(val),
+        }
+    }
+}
+
 impl SizedOnDisk for MessageType {
     fn size(&self) -> PageOffset {
         1
@@ -194,10 +247,35 @@ impl SizedOnDisk for bool {
 }
 
 SizedOnDiskImplForComposite! {
-    pub struct Message {
-        key: OnDiskKey,
+pub struct MessageData {
         val: OnDiskValue,
         ty: MessageType,
+}
+}
+
+impl Serializable for MessageData {
+    fn serialize(&self, destination: &mut [u8]) {
+        let mut cursor = 0;
+        serialize!(self.ty, destination, cursor);
+        serialize!(self.val, destination, cursor);
+        debug_assert_eq!(cursor, self.size());
+    }
+
+    fn deserialize(src: &[u8]) -> Self {
+        let mut cursor = 0;
+        let ty = deserialize!(MessageType, src, cursor);
+        let val = deserialize!(OnDiskValue, src, cursor);
+
+        let s = Self { ty, val };
+        debug_assert_eq!(s.size(), cursor as PageOffset);
+        s
+    }
+}
+
+SizedOnDiskImplForComposite! {
+    pub struct Message {
+        key: OnDiskKey,
+        data: MessageData,
     }
 }
 
@@ -211,7 +289,6 @@ macro_rules! SerializeImplForNumber {
         impl Serializable for $primitive_ty {
             fn serialize(&self, destination: &mut [u8]) {
                 let bytes = self.to_le_bytes();
-
                 destination[..bytes.len()].copy_from_slice(&bytes);
             }
             fn deserialize(src: &[u8]) -> Self {
@@ -274,8 +351,7 @@ impl<T: Serializable, L: Serializable + num::PrimInt> Serializable for VectorOnD
             cursor += total_bytes;
         } else {
             self.iter().for_each(|i| {
-                i.serialize(&mut destination[cursor..]);
-                cursor += i.size();
+                serialize!(i, destination, cursor);
             });
         }
         debug_assert_eq!(cursor as PageOffset, self.size());
@@ -302,8 +378,7 @@ impl<T: Serializable, L: Serializable + num::PrimInt> Serializable for VectorOnD
         } else {
             let v: Vec<_> = (0..len)
                 .map(|_| {
-                    let e = T::deserialize(&destination[cursor..]);
-                    cursor += e.size();
+                    let e = deserialize!(T, destination, cursor);
                     e
                 })
                 .collect();
@@ -338,30 +413,48 @@ impl Serializable for OnDiskValue {
     }
 }
 
-impl Serializable for Message {
+impl<K: Serializable + Ord, V: Serializable> Serializable for BTreeMap<K, V> {
     fn serialize(&self, destination: &mut [u8]) {
         let mut cursor = 0;
-        self.ty.serialize(&mut destination[cursor..]);
-        cursor += self.ty.size() as usize;
-        self.key.serialize(&mut destination[cursor..]);
-        cursor += self.key.size() as usize;
-        self.val.serialize(&mut destination[cursor..]);
-        cursor += self.val.size() as usize;
+        let len = self.len();
+        let len1 = len as OndiskMapLength;
+        serialize!(len1, destination, cursor);
+        self.iter().for_each(|(k, v)| {
+            serialize!(k, destination, cursor);
+            serialize!(v, destination, cursor);
+        });
         debug_assert_eq!(cursor, self.size());
     }
 
     fn deserialize(src: &[u8]) -> Self {
         let mut cursor = 0;
-        let ty = MessageType::deserialize(&src[cursor..]);
-        cursor += ty.size() as usize;
+        let len = usize::from(OndiskMapLength::deserialize(&src[cursor..]));
+        cursor += size_of::<OndiskMapLength>();
+        let map: Self = (0..len)
+            .map(|_| {
+                let k = deserialize!(K, src, cursor);
+                let v = deserialize!(V, src, cursor);
+                (k, v)
+            })
+            .collect();
+        map
+    }
+}
 
-        let key = OnDiskKey::deserialize(&src[cursor..]);
-        cursor += key.size() as usize;
+impl Serializable for Message {
+    fn serialize(&self, destination: &mut [u8]) {
+        let mut cursor = 0;
+        serialize!(self.key, destination, cursor);
+        serialize!(self.data, destination, cursor);
+        debug_assert_eq!(cursor, self.size());
+    }
 
-        let val = OnDiskValue::deserialize(&src[cursor..]);
-        cursor += val.size() as usize;
+    fn deserialize(src: &[u8]) -> Self {
+        let mut cursor = 0;
 
-        let s = Self { ty, key, val };
+        let key = deserialize!(OnDiskKey, src, cursor);
+        let data = deserialize!(MessageData, src, cursor);
+        let s = Self { key, data };
         debug_assert_eq!(s.size(), cursor as PageOffset);
         s
     }

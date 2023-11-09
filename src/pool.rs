@@ -6,7 +6,7 @@ use crate::{
     pager::{PageId, Pager, SimplePager},
 };
 
-struct NodeCache {
+pub struct NodeCache {
     cache: LruCache<PageId, Node>,
     pager: SimplePager,
 }
@@ -44,7 +44,7 @@ impl NodeCache {
             if node.dirty() {
                 let page: Page = (&node).try_into().unwrap();
                 // TODO flush all dirty children
-                self.pager.write(page_id, &page);
+                self.pager.write(page_id, &page).unwrap();
             }
         }
     }

@@ -1,14 +1,21 @@
-use crate::{types::*, SizedOnDiskImplForComposite, PAGESIZE};
-
-type table_index = u16;
-type node_offset = u16;
-type table_entry = node_offset;
+use crate::pool::NodeCache;
+use crate::{node::ChildId, types::*, PAGESIZE};
+use std::collections::BTreeMap;
 
 const BTREE_SPLIT_THRESHOLD: u64 = PAGESIZE / 2;
 
-/**
- * After a split, the free space in the left node may be fragmented.
- * If there's less than this much contiguous free space, then we also
- * defrag the left node.
- */
-const BTREE_DEFRAGMENT_THRESHOLD: u64 = PAGESIZE / 4;
+pub struct Betree {
+    root: ChildId,
+    memtable: BTreeMap<OnDiskKey, MessageData>,
+    pool: NodeCache,
+}
+
+impl Betree {
+    pub fn insert(&mut self, key: Vec<u8>, val: Vec<u8>) {}
+
+    pub fn upsert(&mut self, key: Vec<u8>, val: Vec<u8>) {}
+
+    pub fn get(&mut self, key: &[u8]) -> Vec<u8> {
+        vec![]
+    }
+}
