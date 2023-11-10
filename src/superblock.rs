@@ -76,6 +76,7 @@ impl Superblock {
         self.fd.seek(SeekFrom::Start(SB_PAGE_ID * PAGESIZE))?;
         self.serialize();
         self.fd.write_all((&self.page).into()).unwrap();
+        // flush != fsync, flush only flushes the data from current process to the kernel 
         self.fd.flush().unwrap();
         Ok(())
     }
