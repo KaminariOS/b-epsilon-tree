@@ -1,4 +1,5 @@
 use crate::types::{MessageData, Serializable, VectorOnDisk};
+use core::mem::size_of;
 use std::collections::BTreeMap;
 
 use crate::error::Error;
@@ -8,9 +9,37 @@ use crate::types::{OnDiskKey, OnDiskValue, PageOffset, SizedOnDisk};
 use ser_derive::SizedOnDisk;
 pub type ChildId = PageId;
 
+const MAX_MSG_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
+const MAX_KEY_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
+const MAX_VAL_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
+
 #[derive(SizedOnDisk, Clone)]
-struct LeafNode {
+pub struct LeafNode {
     map: BTreeMap<OnDiskKey, OnDiskValue>,
+}
+
+impl LeafNode {
+    fn new() -> Self {
+        Self {
+            map: BTreeMap::new(),
+        }
+    }
+
+    fn get_meta_size(&self) -> PageOffset {
+        true.size()
+    }
+
+    fn get_kv_avail(&self) -> PageOffset {
+        self.get_kv_capacity() - self.map.size()
+    }
+
+    fn get_kv_capacity(&self) -> PageOffset {
+        PAGESIZE as PageOffset - self.get_meta_size()
+    }
+
+    fn is_node_full(&self, new_entry_size: PageOffset) -> bool {
+        self.get_kv_avail() < new_entry_size
+    }
 }
 
 impl Serializable for LeafNode {
@@ -37,8 +66,38 @@ struct InternelNode {
 }
 
 impl InternelNode {
-    pub fn is_msg_buffer_full(&self) -> bool {
-        false
+    fn get_msg_buffer_capacity(&self) -> PageOffset {
+        (self.get_data_size() as f32 * self.epsilon) as PageOffset
+    }
+
+    fn get_msg_buffer_avail(&self) -> PageOffset {
+        self.get_msg_buffer_capacity() - self.msg_buffer.size()
+    }
+
+    fn get_pivots_capacity(&self) -> PageOffset {
+        self.get_data_size() - self.get_msg_buffer_capacity()
+    }
+
+    fn get_pivots_avail(&self) -> PageOffset {
+        self.get_pivots_capacity() - self.pivots.size()
+    }
+
+    fn get_meta_size(&self) -> PageOffset {
+        true.size() + self.epsilon.size()
+    }
+
+    fn get_data_size(&self) -> PageOffset {
+        PAGESIZE as PageOffset - COM.size() - self.get_meta_size()
+    }
+}
+
+impl InternelNode {
+    pub fn is_msg_buffer_full(&self, new_entry_size: PageOffset) -> bool {
+        self.get_msg_buffer_avail() < new_entry_size
+    }
+
+    pub fn is_pivots_full(&self) -> bool {
+        self.get_pivots_avail() < MAX_KEY_SIZE + size_of::<ChildId>()
     }
 }
 
@@ -111,11 +170,16 @@ impl Serializable for NodeType {
     }
 }
 
-#[derive(Default, SizedOnDisk, Clone)]
+#[derive(Default, Copy, SizedOnDisk, Clone)]
 struct NodeCommon {
     root: bool,
     dirty: bool,
 }
+
+const COM: NodeCommon = NodeCommon {
+    root: false,
+    dirty: true,
+};
 
 impl Serializable for NodeCommon {
     fn serialize(&self, destination: &mut [u8]) {
@@ -150,6 +214,13 @@ impl Node {
 
     pub fn to_page(&self) -> Result<Page, Error> {
         self.try_into()
+    }
+
+    pub fn new_empty_leaf(root: bool) -> Self {
+        Self {
+            common_data: NodeCommon { root, dirty: true },
+            node_inner: NodeType::Leaf(LeafNode::new()),
+        }
     }
 }
 
