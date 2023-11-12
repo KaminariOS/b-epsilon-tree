@@ -1,3 +1,4 @@
+use core::borrow::Borrow;
 use core::fmt::Debug;
 use core::mem::size_of;
 use derive_more::{Deref, DerefMut};
@@ -493,11 +494,77 @@ impl Serializable for Message {
     }
 }
 
-#[derive(Deref, Clone)]
-struct BTreeMapOnDisK<K: Serializable, V: Serializable> {
+#[derive(Deref, Clone, Debug)]
+pub struct BTreeMapOnDisK<K: Serializable, V: Serializable> {
     #[deref]
     inner: BTreeMap<K, V>,
     size: PageOffset,
+}
+impl<K: Serializable, V: Serializable> BTreeMapOnDisK<K, V> {
+    // type InnerMap = BTreeMap<K, V>;
+    pub fn new() -> Self {
+        let inner = BTreeMap::<K, V>::new();
+        Self {
+            size: inner.size(),
+            inner,
+        }
+    }
+}
+
+impl<K: Serializable + Ord, V: Serializable> BTreeMapOnDisK<K, V> {
+    // type InnerMap = BTreeMap<K, V>;
+    pub fn pop_last(&mut self) -> Option<(K, V)> {
+        let last = self.inner.pop_last();
+        self.size -= last.size();
+        last
+    }
+
+    pub fn insert(&mut self, k: K, v: V) -> Option<V> {
+        let k_size = k.size();
+        self.size += v.size();
+        let res = self.inner.insert(k, v);
+        if res.is_some() {
+            self.size -= res.size();
+        } else {
+            self.size += k_size;
+        };
+        res
+    }
+
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        let res = self.inner.remove(key);
+        if res.is_some() {
+            self.size -= key.size() + res.size();
+        }
+        res
+    }
+
+    pub fn append(&mut self, other: &mut BTreeMap<K, V>) {
+        self.inner.append(other);
+        self.size = self.size();
+    }
+
+    pub fn split_off(&mut self, key: &K) -> BTreeMap<K, V> {
+        let new_map = self.inner.split_off(key);
+        self.size = self.inner.size();
+        new_map
+    }
+}
+
+impl<T: SizedOnDisk, V: SizedOnDisk> SizedOnDisk for (T, V) {
+    fn size(&self) -> PageOffset {
+        self.0.size() + self.1.size()
+    }
+}
+
+impl<T: SizedOnDisk> SizedOnDisk for Option<T> {
+    fn size(&self) -> PageOffset {
+        if let Some(e) = self {
+            e.size()
+        } else {
+            0
+        }
+    }
 }
 
 impl<K: Serializable, V: Serializable> SizedOnDisk for BTreeMapOnDisK<K, V> {
@@ -518,6 +585,13 @@ impl<K: Serializable + Ord, V: Serializable> Serializable for BTreeMapOnDisK<K, 
             inner,
             size: cursor,
         }
+    }
+}
+
+impl<K: Serializable + Ord, V: Serializable> From<BTreeMap<K, V>> for BTreeMapOnDisK<K, V> {
+    fn from(inner: BTreeMap<K, V>) -> Self {
+        let size = inner.size();
+        Self { inner, size }
     }
 }
 

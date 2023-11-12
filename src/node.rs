@@ -1,16 +1,19 @@
 use crate::types::{MessageData, MessageType, Serializable};
 use core::mem::size_of;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use crate::error::Error;
 use crate::page::{Page, PAGESIZE};
 use crate::pager::PageId;
-use crate::types::{OnDiskKey, OnDiskValue, PageOffset, SizedOnDisk};
+use crate::types::{BTreeMapOnDisK, OnDiskKey, OnDiskValue, PageOffset, SizedOnDisk};
 use ser_derive::SizedOnDisk;
 pub type ChildId = PageId;
 pub type MsgBuffer = BTreeMap<OnDiskKey, MessageData>;
+pub type MsgBufferOnDisk = BTreeMapOnDisK<OnDiskKey, MessageData>;
 pub type PivotMap = BTreeMap<OnDiskKey, ChildId>;
+pub type PivotMapOnDisk = BTreeMapOnDisK<OnDiskKey, ChildId>;
+pub type KVOnDisk = BTreeMapOnDisK<OnDiskKey, OnDiskValue>;
 
 const MAX_MSG_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 const MAX_KEY_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
@@ -20,13 +23,13 @@ const MAGIC: u64 = 0x18728742b91b43b;
 
 #[derive(SizedOnDisk, Clone, Debug)]
 pub struct LeafNode {
-    map: BTreeMap<OnDiskKey, OnDiskValue>,
+    map: KVOnDisk,
 }
 
 impl LeafNode {
     fn new() -> Self {
         Self {
-            map: BTreeMap::new(),
+            map: KVOnDisk::new(),
         }
     }
 
@@ -98,14 +101,12 @@ impl LeafNode {
 impl Serializable for LeafNode {
     fn serialize(&self, destination: &mut [u8]) {
         debug_assert!(self.well_formed());
-        let mut cursor = 0;
-        serialize!(self.map, destination, cursor);
+        serialize!(self.map, destination);
     }
 
     fn deserialize(src: &[u8]) -> Self {
-        let mut cursor = 0;
-        let map = deserialize!(BTreeMap<OnDiskKey, OnDiskValue>, src, cursor);
-        Self { map }
+        deserialize_with_var!(map, BTreeMap<OnDiskKey, OnDiskValue>, src);
+        Self { map: map.into() }
     }
 }
 
@@ -113,9 +114,9 @@ type PivotsLength = u16;
 
 #[derive(SizedOnDisk, Clone, Debug)]
 pub struct InternalNode {
-    pub pivot_map: BTreeMap<OnDiskKey, ChildId>,
+    pub pivot_map: PivotMapOnDisk,
     pub rightmost_child: ChildId,
-    pub msg_buffer: MsgBuffer,
+    pub msg_buffer: MsgBufferOnDisk,
     epsilon: f32,
 }
 
@@ -214,9 +215,9 @@ impl InternalNode {
         rightmost_child: ChildId,
     ) -> Self {
         Self {
-            pivot_map,
+            pivot_map: pivot_map.into(),
             rightmost_child,
-            msg_buffer: BTreeMap::new(),
+            msg_buffer: MsgBufferOnDisk::new(),
             epsilon: 0.5,
         }
     }
@@ -231,10 +232,13 @@ impl InternalNode {
             if self.rightmost_child == old_child {
                 self.rightmost_child = child_id;
             } else {
-                self.pivot_map
-                    .iter_mut()
+                let k = self
+                    .pivot_map
+                    .iter()
                     .find(|(k, v)| **v == old_child)
-                    .map(|(_k, v)| *v = child_id);
+                    .map(|(k, _)| k.clone())
+                    .unwrap();
+                self.pivot_map.insert(k, child_id);
             }
         } else {
             let (mut pivot_map, rightmost_child) = convert_pivot(child_id, new_pivots);
@@ -269,9 +273,9 @@ impl InternalNode {
             common_data: COM,
             node_inner: NodeType::Internal(InternalNode::new(
                 self.epsilon,
-                new_pivots,
+                new_pivots.into(),
                 original_rightmost,
-                msgs,
+                msgs.into(),
             )),
         };
         debug_assert!(self.well_formed());
@@ -288,8 +292,8 @@ impl InternalNode {
     ) -> Self {
         Self {
             epsilon,
-            msg_buffer,
-            pivot_map,
+            msg_buffer: msg_buffer.into(),
+            pivot_map: pivot_map.into(),
             rightmost_child,
         }
     }
@@ -313,9 +317,9 @@ impl Serializable for InternalNode {
         let msg_buffer = deserialize!(MsgBuffer, src, cursor);
         let new_node = Self {
             epsilon,
-            pivot_map,
+            pivot_map: pivot_map.into(),
             rightmost_child,
-            msg_buffer,
+            msg_buffer: msg_buffer.into(),
         };
         debug_assert!(new_node.well_formed());
         new_node
