@@ -1,6 +1,7 @@
 use crate::types::{MessageData, MessageType, Serializable};
 use core::mem::size_of;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Debug;
 
 use crate::error::Error;
 use crate::page::{Page, PAGESIZE};
@@ -14,6 +15,8 @@ pub type PivotMap = BTreeMap<OnDiskKey, ChildId>;
 const MAX_MSG_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 const MAX_KEY_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 const MAX_VAL_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
+
+const MAGIC: u64 = 0x18728742b91b43b;
 
 #[derive(SizedOnDisk, Clone, Debug)]
 pub struct LeafNode {
@@ -32,7 +35,7 @@ impl LeafNode {
     }
 
     fn get_meta_size(&self) -> PageOffset {
-        true.size() + COM.size()
+        true.size() + COM.size() + MAGIC.size()
     }
 
     fn get_kv_avail(&self) -> PageOffset {
@@ -139,7 +142,7 @@ impl InternalNode {
     }
 
     fn get_meta_size(&self) -> PageOffset {
-        true.size() + self.epsilon.size()
+        true.size() + self.epsilon.size() + MAGIC.size()
     }
 
     fn get_data_size(&self) -> PageOffset {
@@ -160,7 +163,7 @@ impl InternalNode {
     }
 
     pub fn find_child_with_most_msgs(&self) -> ChildId {
-        let mut record: HashMap<ChildId, PageOffset> = HashMap::new();
+        let mut record: BTreeMap<ChildId, PageOffset> = BTreeMap::new();
         self.msg_buffer.iter().for_each(|(k, v)| {
             let child_id = self.find_child_with_key(k);
             *record.entry(child_id).or_default() += k.size() + v.size();
@@ -216,7 +219,7 @@ impl InternalNode {
         new_pivots: Vec<(OnDiskKey, ChildId)>,
     ) {
         if new_pivots.is_empty() {
-            if self.rightmost_child == child_id {
+            if self.rightmost_child == old_child {
                 self.rightmost_child = child_id;
             } else {
                 self.pivot_map
@@ -227,11 +230,14 @@ impl InternalNode {
         } else {
             let (mut pivot_map, rightmost_child) = convert_pivot(child_id, new_pivots);
             let cursor = self.pivot_map.lower_bound(std::ops::Bound::Included(
-                pivot_map.last_key_value().unwrap().0,
+                pivot_map.first_key_value().unwrap().0,
             ));
-            if let Some(k) = cursor.key().map(|x| x.clone()) {
+            if let Some((k, v)) = cursor.key_value().map(|(k, v)| (k.clone(), *v)) {
+                debug_assert_eq!(v, old_child);
+                debug_assert!(pivot_map.last_key_value().unwrap().0 <= &k);
                 self.pivot_map.insert(k, rightmost_child);
             } else {
+                debug_assert_eq!(self.rightmost_child, old_child);
                 self.rightmost_child = rightmost_child;
             }
             self.pivot_map.append(&mut pivot_map);
@@ -239,15 +245,15 @@ impl InternalNode {
     }
 
     pub fn split(&mut self) -> (Node, OnDiskKey) {
-        // match &mut self.node_inner {
-        // }
         let len = self.pivot_map.len();
         debug_assert!(len >= 3);
         let median = len / 2;
         let key_next = self.pivot_map.keys().nth(median + 1).unwrap().clone();
-        let msgs = self.msg_buffer.split_off(&key_next);
         let new_pivots = self.pivot_map.split_off(&key_next);
         let (median_key, rightmost_child) = self.pivot_map.pop_last().unwrap().clone();
+        let mut msgs = self.msg_buffer.split_off(&median_key);
+        let msg = msgs.remove_entry(&median_key);
+        msg.map(|(k, m)| self.msg_buffer.insert(k, m));
         let original_rightmost = self.rightmost_child;
         self.rightmost_child = rightmost_child;
         (
@@ -484,6 +490,8 @@ impl TryFrom<&Page> for Node {
     type Error = Error;
     fn try_from(value: &Page) -> Result<Self, Self::Error> {
         let mut cursor = NODE_META_OFFSET;
+        deserialize_with_var!(magic, u64, value, cursor);
+        assert_eq!(magic, MAGIC);
         let common_data = deserialize!(NodeCommon, value, cursor);
         let node_inner = deserialize!(NodeType, value, cursor);
         Ok(Node {
@@ -505,6 +513,7 @@ impl TryFrom<&Node> for Page {
     fn try_from(value: &Node) -> Result<Self, Self::Error> {
         let mut page = Page::default();
         let mut cursor = NODE_META_OFFSET;
+        serialize!(MAGIC, page, cursor);
         serialize!(value.common_data, page, cursor);
         serialize!(value.node_inner, page, cursor);
         Ok(page)

@@ -20,7 +20,7 @@ pub struct Betree {
 impl Betree {
     fn copy_node(&mut self, old_id: &ChildId) -> ChildId {
         let new_page_id = self.superblock.alloc();
-        let mut new_node = self.pool.get_mut(old_id).clone();
+        let mut new_node = self.pool.get(old_id).clone();
         new_node.dirt();
         // println!("New :{}, old: {}", old_id, new_page_id);
         self.pool.put(new_page_id, new_node);
@@ -241,7 +241,7 @@ impl Betree {
 
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let mut superblock = Superblock::new(&path);
-        let mut pool = NodeCache::new(&superblock.storage_filename, true, 100.try_into().unwrap());
+        let mut pool = NodeCache::new(&superblock.storage_filename, true, 1000.try_into().unwrap());
         let root = Node::new_empty_leaf(true);
         let page_id = superblock.allocator.alloc();
         pool.put(page_id, root);
@@ -258,8 +258,11 @@ impl Betree {
     pub fn open<P: AsRef<Path>>(path: P) -> Self {
         if Superblock::exists(&path) {
             let superblock = Superblock::open(path);
-            let mut pool =
-                NodeCache::new(&superblock.storage_filename, false, 10.try_into().unwrap());
+            let mut pool = NodeCache::new(
+                &superblock.storage_filename,
+                false,
+                1000.try_into().unwrap(),
+            );
             let root = superblock.root;
             assert!(pool.get(&root).is_root());
             Self {
@@ -335,33 +338,38 @@ impl Betree {
     }
 }
 
-#[test]
+#[cfg(test)]
 fn test_btree() {
-    use rand::prelude::*;
+    // use rand::prelude::*;
     // use rand_chacha::ChaCha8Rng;
-    use std::collections::HashMap;
-    let mut rng = StdRng::seed_from_u64(69420);
+    // let mut rng = StdRng::seed_from_u64(69420);
     let mut betree = Betree::open("/tmp/test_betree");
-    // betree.print_tree();
+    betree.print_tree();
     // println!("Superblock root: {}", betree.superblock.last_flushed_root);
     let test_cap = 18010;
-    let mut ref_map = HashMap::with_capacity(test_cap);
-    for i in 0..test_cap {
+    // let mut ref_map = HashMap::with_capacity(test_cap);
+
+    use std::fs::File;
+    // let file = File::create("test_map").unwrap();
+    // serde_json::to_writer(file, &ref_map).unwrap();
+    let file = File::open("test_map").unwrap();
+    let v: Vec<(u64, u64)> = serde_json::from_reader(file).unwrap();
+    println!("first ten: {:?}", &v[..10]);
+
+    for &(k_val, v_val) in &v {
         // let k = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
         // let v = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
-        let k_val = rng.gen::<u64>();
         let k = k_val.to_be_bytes().to_vec();
-        let v_val = rng.gen::<u64>();
         let v = v_val.to_be_bytes().to_vec();
-        ref_map.insert(k_val, v_val);
+        // ref_map.insert(k_val, v_val);
         betree.insert(k, v);
     }
 
     betree.print_tree();
-    ref_map.iter().for_each(|(k, v)| {
+    v.iter().enumerate().for_each(|(i, &(k, v))| {
         let res = betree
             .get(&k.to_be_bytes().to_vec())
-            .expect(&format!("Couldn't get betree for {}", k));
+            .expect(&format!("Couldn't get betree for {}th: {}", i, k));
         assert_eq!(&res, &v.to_be_bytes().to_vec());
     });
 
@@ -376,5 +384,35 @@ fn test_btree() {
     //         assert_eq!(res, v);
     //     }
     //     );
-    // assert!(false);
+    assert!(false);
+}
+
+#[cfg(test)]
+fn generate_test_file() {
+    use std::collections::HashMap;
+    use std::fs::File;
+    // let file = File::create("test_map").unwrap();
+    // serde_json::to_writer(file, &ref_map).unwrap();
+    let file = File::create("test_map").unwrap();
+    let test_cap = 480000;
+
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(69420);
+    let mut ref_map = HashMap::with_capacity(test_cap);
+
+    for i in 0..test_cap {
+        // let k = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
+        // let v = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
+        let k_val = rng.gen::<u64>();
+        let v_val = rng.gen::<u64>();
+        ref_map.insert(k_val, v_val);
+    }
+    let v: Vec<(u64, u64)> = ref_map.into_iter().collect();
+    serde_json::to_writer(file, &v).unwrap();
+}
+
+#[test]
+fn test_both() {
+    // generate_test_file();
+    test_btree();
 }

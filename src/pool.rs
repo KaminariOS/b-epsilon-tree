@@ -77,7 +77,10 @@ impl NodeCache {
     }
 
     fn evict_one_if_full(&mut self) {
-        if self.cache.len() == self.cache.cap().into() {
+        let len = self.cache.len();
+        let cap = <NonZeroUsize as Into<usize>>::into(self.cache.cap());
+        debug_assert!(len <= cap);
+        if len == cap {
             let (page_id, node) = self.cache.pop_lru().unwrap();
             if node.dirty() {
                 let page: Page = (&node).try_into().unwrap();

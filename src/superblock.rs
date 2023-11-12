@@ -8,7 +8,6 @@ use crate::{
     types::{Serializable, SizedOnDisk},
     wal::Wal,
 };
-use ser_derive::SizedOnDisk;
 use std::io::{Read, Seek, SeekFrom};
 use std::{
     fs::{File, OpenOptions},
@@ -63,7 +62,7 @@ impl Superblock {
         deserialize_with_var!(last_checkpoint, u64, src, cursor);
         deserialize_with_var!(storage_filename, String, src, cursor);
         deserialize_with_var!(allocator, SimpleAllocator, src, cursor);
-        println!("Deseri: {:?}", allocator);
+        println!("root: {}, Deseri: {:?}", root, allocator);
         deserialize_with_var!(wal, Wal, src, cursor);
         Self {
             root,
