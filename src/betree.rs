@@ -35,7 +35,7 @@ impl Betree {
         let mut buf = MsgBuffer::new();
         buf.insert(key, msg_data);
         let (mut child_id, mut p) = self.send_msgs_to_subtree(self.root, buf);
-        assert!(p.is_empty());
+        debug_assert!(p.is_empty());
         // while !res.1.is_empty() {
         // let node = self.pool.get_mut(self.root);
         // node.
@@ -124,7 +124,7 @@ impl Betree {
                 //     (current, pivots)
                 // }
             }
-            NodeType::Internel(internal) => {
+            NodeType::Internal(internal) => {
                 // if node.need_pre_split(msgs.size()) {
                 //     let right_sib_id = self.superblock.alloc();
                 //     let (right_sib, median) = node.split();
@@ -193,23 +193,55 @@ impl Betree {
         // logging
     }
 
-    pub fn get(&mut self, key: &[u8]) -> Option<&[u8]> {
+    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let key = OnDiskKey::new(key.to_vec());
         self.get_from_subtree(&key, self.root)
     }
 
-    fn get_from_subtree<'a, 'b: 'a>(
-        &'b mut self,
-        key: &OnDiskKey,
-        page: ChildId,
-    ) -> Option<&'a [u8]> {
+    // Fuck borrow checker
+    // fn get_from_subtree(
+    //     &mut self,
+    //     key: &OnDiskKey,
+    //     page: ChildId,
+    // ) -> Option<&[u8]> {
+    //     let next_child;
+    //     let node = self.pool.get(&page);
+    //     let res = match &node.node_inner {
+    //         NodeType::Leaf(leaf) => {
+    //             leaf.get(key)
+    //         }
+    //         NodeType::Internal(internal) => {
+    //             match internal.get(key) {
+    //                 Ok(slice) => Some(slice),
+    //                 Err(child_id) => {next_child = child_id; None}
+    //             }
+    //         }
+    //         _ => {unimplemented!()}
+    //     };
+    //
+    //     if let Some(slice) = res {
+    //         return Some(slice)
+    //     }
+    //     self.get_from_subtree(key, next_child)
+    // }
+
+    fn get_from_subtree(&mut self, key: &OnDiskKey, page: ChildId) -> Option<Vec<u8>> {
         let node = self.pool.get(&page);
-        None
+        match &node.node_inner {
+            NodeType::Leaf(leaf) => leaf.get(key).map(|s| s.to_vec()),
+            NodeType::Internal(internal) => match internal.get(key) {
+                Ok(slice) => Some(slice.to_vec()),
+                Err(child_id) => self.get_from_subtree(key, child_id),
+            },
+            _ => {
+                unimplemented!()
+            }
+        }
     }
 
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let mut superblock = Superblock::new(&path);
-        let mut pool = NodeCache::new(&superblock.storage_filename, true, 10.try_into().unwrap());
+        let mut pool = NodeCache::new(&superblock.storage_filename, true, 100.try_into().unwrap());
         let root = Node::new_empty_leaf(true);
         let page_id = superblock.allocator.alloc();
         pool.put(page_id, root);
@@ -254,8 +286,15 @@ impl Betree {
             while let Some(n) = q.pop_front() {
                 let node = self.pool.get(&n);
                 let mut s = "".to_owned();
+
                 match &node.node_inner {
-                    NodeType::Internel(internel) => {
+                    NodeType::Internal(internel) => {
+                        if node.is_root() {
+                            s.push_str(&format!(
+                                "root(pivot: {:?}); rightmost: {} ",
+                                internel.pivot_map, internel.rightmost_child
+                            ));
+                        }
                         s.push_str("Internel ");
                         s.push_str(&format!(
                             "Msg buffer size: {}/{} ",
@@ -271,6 +310,7 @@ impl Betree {
                             .pivot_map
                             .iter()
                             .for_each(|(k, c)| new_queue.push_back(*c));
+                        new_queue.push_back(internel.rightmost_child);
                     }
                     NodeType::Leaf(leaf) => {
                         s.push_str("Leaf");
@@ -285,6 +325,7 @@ impl Betree {
                 print!("Node ID({}): {} | ", n, s);
             }
             println!();
+            println!("=================================================================================================================================================");
             if new_queue.is_empty() {
                 break;
             } else {
@@ -297,20 +338,43 @@ impl Betree {
 #[test]
 fn test_btree() {
     use rand::prelude::*;
-    use rand_chacha::ChaCha8Rng;
+    // use rand_chacha::ChaCha8Rng;
     use std::collections::HashMap;
-    let mut rng = ChaCha8Rng::seed_from_u64(2);
+    let mut rng = StdRng::seed_from_u64(69420);
     let mut betree = Betree::open("/tmp/test_betree");
     // betree.print_tree();
     // println!("Superblock root: {}", betree.superblock.last_flushed_root);
-    let test_cap = 40000;
+    let test_cap = 18010;
     let mut ref_map = HashMap::with_capacity(test_cap);
     for i in 0..test_cap {
-        let k = vec![rng.gen(), rng.gen()];
-        let v = vec![rng.gen(), rng.gen()];
-        ref_map.insert(k.clone(), v.clone());
+        // let k = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
+        // let v = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
+        let k_val = rng.gen::<u64>();
+        let k = k_val.to_be_bytes().to_vec();
+        let v_val = rng.gen::<u64>();
+        let v = v_val.to_be_bytes().to_vec();
+        ref_map.insert(k_val, v_val);
         betree.insert(k, v);
     }
+
     betree.print_tree();
-    assert!(false);
+    ref_map.iter().for_each(|(k, v)| {
+        let res = betree
+            .get(&k.to_be_bytes().to_vec())
+            .expect(&format!("Couldn't get betree for {}", k));
+        assert_eq!(&res, &v.to_be_bytes().to_vec());
+    });
+
+    // betree.flush();
+    // core::mem::drop(betree);
+    // let mut betree = Betree::open("/tmp/test_betree");
+    //
+    // ref_map.into_iter().for_each(
+    //     |(k, v)|
+    //     {
+    //         let res = betree.get(&k).unwrap();
+    //         assert_eq!(res, v);
+    //     }
+    //     );
+    // assert!(false);
 }

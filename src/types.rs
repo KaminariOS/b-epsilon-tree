@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use core::mem::size_of;
 use derive_more::{Deref, DerefMut};
 use num_derive::FromPrimitive;
@@ -54,10 +55,10 @@ macro_rules! SizedOnDiskImplForPrimitive {
             }
 
             fn is_packed() -> Option<usize> {
-                #[cfg(target_endian = "little")]
+                /*     #[cfg(target_endian = "little")]
                 return Some(size_of::<Self>());
 
-                #[cfg(not(target_endian = "little"))]
+                #[cfg(not(target_endian = "little"))]*/
                 return None;
             }
         }
@@ -130,12 +131,28 @@ impl Serializable for String {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deref, DerefMut)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Deref, DerefMut)]
 pub struct VectorOnDisk<T: Serializable, L: num::PrimInt + Serializable> {
     #[deref]
     #[deref_mut]
     elements: Vec<T>,
     _p: std::marker::PhantomData<L>,
+}
+
+const ASCII_MOD: u8 = 127;
+impl Debug for OnDiskKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let v: Vec<_> = self.elements.iter().map(|i| *i % ASCII_MOD).collect();
+        write!(f, "key")
+        // write!(f, "\"{}\"", core::str::from_utf8(&v).unwrap())
+    }
+}
+
+impl Debug for OnDiskValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let v: Vec<_> = self.elements.iter().map(|i| *i % ASCII_MOD).collect();
+        write!(f, "\"{}\"", core::str::from_utf8(&v).unwrap())
+    }
 }
 
 impl<T: Serializable, L: num::PrimInt + Serializable> VectorOnDisk<T, L> {
@@ -153,7 +170,7 @@ impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for VectorOnDi
     }
 }
 
-#[derive(PartialEq, Eq, Ord, PartialOrd, Debug, DerefMut, Clone, Deref, SizedOnDisk)]
+#[derive(PartialEq, Eq, Ord, PartialOrd, DerefMut, Clone, Deref, SizedOnDisk)]
 pub struct OnDiskKey {
     // pub flags: OndiskFlags,
     #[deref]
@@ -182,7 +199,7 @@ impl OnDiskKey {
     }
 }
 
-#[derive(SizedOnDisk, Clone, Deref, DerefMut, Debug)]
+#[derive(SizedOnDisk, Clone, Deref, DerefMut)]
 pub struct OnDiskValue {
     // pub flags: OndiskFlags,
     pub bytes: VectorOnDisk<u8, OndiskValueLength>,

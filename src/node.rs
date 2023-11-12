@@ -27,6 +27,10 @@ impl LeafNode {
         }
     }
 
+    pub fn get(&self, key: &OnDiskKey) -> Option<&[u8]> {
+        self.map.get(key).map(|v| v.as_slice())
+    }
+
     fn get_meta_size(&self) -> PageOffset {
         true.size() + COM.size()
     }
@@ -100,14 +104,14 @@ impl Serializable for LeafNode {
 type PivotsLength = u16;
 
 #[derive(SizedOnDisk, Clone, Debug)]
-pub struct InternelNode {
+pub struct InternalNode {
     pub pivot_map: BTreeMap<OnDiskKey, ChildId>,
-    rightmost_child: ChildId,
+    pub rightmost_child: ChildId,
     pub msg_buffer: MsgBuffer,
     epsilon: f32,
 }
 
-impl InternelNode {
+impl InternalNode {
     pub fn get_msg_buffer_capacity(&self) -> PageOffset {
         (self.get_data_size() as f32 * self.epsilon) as PageOffset
     }
@@ -131,7 +135,7 @@ impl InternelNode {
     }
 
     pub fn get_pivots_avail(&self) -> PageOffset {
-        self.get_pivots_capacity() - self.pivot_map.size()
+        self.get_pivots_capacity() - self.pivot_map.size() - self.rightmost_child.size()
     }
 
     fn get_meta_size(&self) -> PageOffset {
@@ -163,6 +167,14 @@ impl InternelNode {
         });
         let (child, size) = record.into_iter().max_by_key(|(_x, size)| *size).unwrap();
         child
+    }
+
+    pub fn get(&self, key: &OnDiskKey) -> Result<&[u8], ChildId> {
+        if let Some(slice) = self.msg_buffer.get(key).map(|m| m.val.as_slice()) {
+            Ok(slice)
+        } else {
+            Err(self.find_child_with_key(key))
+        }
     }
 
     fn find_child_with_key(&self, k: &OnDiskKey) -> ChildId {
@@ -241,7 +253,7 @@ impl InternelNode {
         (
             Node {
                 common_data: COM,
-                node_inner: NodeType::Internel(InternelNode::new(
+                node_inner: NodeType::Internal(InternalNode::new(
                     self.epsilon,
                     new_pivots,
                     original_rightmost,
@@ -268,7 +280,7 @@ impl InternelNode {
     }
 }
 
-impl Serializable for InternelNode {
+impl Serializable for InternalNode {
     fn serialize(&self, destination: &mut [u8]) {
         let mut cursor = 0;
         serialize!(self.epsilon, destination, cursor);
@@ -295,7 +307,7 @@ impl Serializable for InternelNode {
 #[derive(Clone, Debug)]
 pub enum NodeType {
     Leaf(LeafNode),
-    Internel(InternelNode),
+    Internal(InternalNode),
     Test,
 }
 
@@ -304,7 +316,7 @@ impl SizedOnDisk for NodeType {
         true.size()
             + match self {
                 Self::Leaf(leaf) => leaf.size(),
-                Self::Internel(i) => i.size(),
+                Self::Internal(i) => i.size(),
                 _ => unimplemented!(),
             }
     }
@@ -319,7 +331,7 @@ impl Serializable for NodeType {
             Self::Leaf(leaf) => {
                 serialize!(leaf, destination, cursor);
             }
-            Self::Internel(i) => {
+            Self::Internal(i) => {
                 serialize!(i, destination, cursor);
             }
             _ => unimplemented!(),
@@ -332,7 +344,7 @@ impl Serializable for NodeType {
         if is_leaf {
             Self::Leaf(deserialize!(LeafNode, src, cursor))
         } else {
-            Self::Internel(deserialize!(InternelNode, src, cursor))
+            Self::Internal(deserialize!(InternalNode, src, cursor))
         }
     }
 }
@@ -375,7 +387,7 @@ impl Node {
                 root: true,
                 dirty: true,
             },
-            node_inner: NodeType::Internel(InternelNode::new_internel_root(
+            node_inner: NodeType::Internal(InternalNode::new_internel_root(
                 pivot_map,
                 rightmost_child,
             )),
@@ -415,7 +427,7 @@ impl Node {
 
     pub fn get_key(&self, key: &OnDiskKey) -> Option<&OnDiskValue> {
         match &self.node_inner {
-            NodeType::Internel(internal) => {
+            NodeType::Internal(internal) => {
                 internal
                     .msg_buffer
                     .get(key)
@@ -438,7 +450,7 @@ impl Node {
     pub fn need_pre_split(&self, msg_size: PageOffset) -> bool {
         match &self.node_inner {
             NodeType::Leaf(_leaf) => false,
-            NodeType::Internel(internel) => {
+            NodeType::Internal(internel) => {
                 if !internel.is_msg_buffer_full(msg_size) {
                     false
                 } else {
@@ -456,7 +468,7 @@ impl Node {
 
     pub fn well_formed(&self) -> bool {
         match &self.node_inner {
-            NodeType::Internel(internel) => {
+            NodeType::Internal(internel) => {
                 !internel.is_pivots_full() && !internel.is_msg_buffer_full(0)
             }
             NodeType::Leaf(leaf) => leaf.is_node_full(),
