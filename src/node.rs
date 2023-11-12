@@ -160,7 +160,7 @@ impl InternalNode {
     }
 
     pub fn is_msg_buffer_full(&self) -> bool {
-        self.get_msg_buffer_capacity() >= self.msg_buffer.size()
+        self.get_msg_buffer_capacity() < self.msg_buffer.size()
     }
 
     pub fn is_pivots_full(&self) -> bool {
@@ -173,12 +173,13 @@ impl InternalNode {
     }
 
     pub fn find_child_with_most_msgs(&self) -> ChildId {
+        debug_assert!(!self.msg_buffer.is_empty(), "Msg buffer size: {}", self.msg_buffer.size());
         let mut record: BTreeMap<ChildId, PageOffset> = BTreeMap::new();
         self.msg_buffer.iter().for_each(|(k, v)| {
             let child_id = self.find_child_with_key(k);
             *record.entry(child_id).or_default() += k.size() + v.size();
         });
-        let (child, size) = record.into_iter().max_by_key(|(_x, size)| *size).unwrap();
+        let (child, _size) = record.into_iter().max_by_key(|(_, size)| *size).unwrap();
         child
     }
 

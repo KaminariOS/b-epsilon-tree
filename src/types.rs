@@ -541,7 +541,7 @@ impl<K: Serializable + Ord, V: Serializable> BTreeMapOnDisK<K, V> {
 
     pub fn append(&mut self, other: &mut BTreeMap<K, V>) {
         self.inner.append(other);
-        self.size = self.size();
+        self.size = self.inner.size();
     }
 
     pub fn split_off(&mut self, key: &K) -> BTreeMap<K, V> {
