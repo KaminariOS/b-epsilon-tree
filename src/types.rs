@@ -29,7 +29,7 @@ impl SizedOnDisk for String {
 
 impl From<String> for VectorOnDisk<u8, OndiskKeyLength> {
     fn from(value: String) -> Self {
-        VectorOnDisk::new(value.into_bytes(), 1 as _)
+        value.into_bytes().into()
     }
 }
 
@@ -40,11 +40,11 @@ impl From<VectorOnDisk<u8, OndiskKeyLength>> for String {
     }
 }
 
-impl<T: Serializable> From<Vec<T>> for VectorOnDisk<T, OndiskKeyLength> {
-    fn from(value: Vec<T>) -> Self {
-        Self::new(value, 1 as _)
-    }
-}
+// impl<T: Serializable> From<Vec<T>> for VectorOnDisk<T, OndiskKeyLength> {
+//     fn from(value: Vec<T>) -> Self {
+//         Self::new(value)
+//     }
+// }
 
 #[macro_export]
 macro_rules! SizedOnDiskImplForPrimitive {
@@ -73,8 +73,7 @@ macro_rules! SizedOnDiskImplForPrimitive {
 //
 //                 $(
 //
-//                     $(#[$($attrss_f:tt)*])*
-//                     $field_vis:vis $field_name:ident: $field_type:ty),*$(,)?
+//                     $(#[$($attrss_f:tt)*])* $field_vis:vis $field_name:ident: $field_type:ty),*$(,)?
 //             }
 //         ) => {
 //             $(#[$($attrss)*])*
@@ -99,6 +98,9 @@ macro_rules! serialize {
         $s.serialize(&mut $des[$cursor..$cursor + $s.size()]);
         $cursor += $s.size();
     };
+    ($s:expr, $des: ident) => {
+        $s.serialize(&mut $des[..$s.size()]);
+    };
 }
 
 #[macro_export]
@@ -108,12 +110,18 @@ macro_rules! deserialize {
         $cursor += v.size();
         v
     }};
+    ($s:ty, $src: ident) => {
+        <$s>::deserialize($src)
+    };
 }
 
 #[macro_export]
 macro_rules! deserialize_with_var {
     ($var: ident, $s:ty, $src: ident, $cursor:ident) => {
         let $var = deserialize!($s, $src, $cursor);
+    };
+    ($var: ident, $s:ty, $src: ident) => {
+        let $var = deserialize!($s, $src);
     };
 }
 
@@ -131,11 +139,11 @@ impl Serializable for String {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Deref, DerefMut)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Deref)]
 pub struct VectorOnDisk<T: Serializable, L: num::PrimInt + Serializable> {
     #[deref]
-    #[deref_mut]
     elements: Vec<T>,
+    size: PageOffset,
     _p: std::marker::PhantomData<L>,
 }
 
@@ -155,18 +163,9 @@ impl Debug for OnDiskValue {
     }
 }
 
-impl<T: Serializable, L: num::PrimInt + Serializable> VectorOnDisk<T, L> {
-    pub fn new(elements: Vec<T>, _u: L) -> Self {
-        Self {
-            elements,
-            _p: std::marker::PhantomData,
-        }
-    }
-}
-
 impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for VectorOnDisk<T, L> {
     fn size(&self) -> PageOffset {
-        (size_of::<L>() + self.elements.iter().map(|e| e.size()).sum::<PageOffset>()) as PageOffset
+        self.size
     }
 }
 
@@ -178,11 +177,20 @@ pub struct OnDiskKey {
     pub bytes: VectorOnDisk<u8, OndiskKeyLength>,
 }
 
+impl<T: Serializable, L: num::PrimInt + Serializable> From<Vec<T>> for VectorOnDisk<T, L> {
+    fn from(elements: Vec<T>) -> Self {
+        let size = size_of::<L>() + elements.iter().map(|e| e.size()).sum::<PageOffset>();
+        Self {
+            elements,
+            size,
+            _p: std::marker::PhantomData,
+        }
+    }
+}
+
 impl OnDiskKey {
     pub fn new(key: Vec<u8>) -> Self {
-        Self {
-            bytes: VectorOnDisk::new(key, 0 as OndiskKeyLength),
-        }
+        Self { bytes: key.into() }
     }
 
     #[cfg(test)]
@@ -194,7 +202,7 @@ impl OnDiskKey {
             .map(char::from)
             .collect();
         Self {
-            bytes: VectorOnDisk::new(s.as_bytes().to_vec(), 0 as OndiskKeyLength),
+            bytes: s.into_bytes().into(),
         }
     }
 }
@@ -207,9 +215,7 @@ pub struct OnDiskValue {
 
 impl OnDiskValue {
     pub fn new(val: Vec<u8>) -> Self {
-        Self {
-            bytes: VectorOnDisk::new(val, 1 as OndiskValueLength),
-        }
+        Self { bytes: val.into() }
     }
 }
 
@@ -393,7 +399,7 @@ impl<T: Serializable, L: Serializable + num::PrimInt> Serializable for VectorOnD
         let len1 = L::deserialize(&destination[cursor..]);
         let len = <usize as num::NumCast>::from(len1).unwrap();
         cursor += l_size;
-        let bytes_on_disk;
+        let bytes_on_disk: Self;
         if let Some(size) = T::is_packed() {
             let total_bytes = len * size;
             let v = (unsafe {
@@ -403,13 +409,13 @@ impl<T: Serializable, L: Serializable + num::PrimInt> Serializable for VectorOnD
                 )
             })
             .to_vec();
-            bytes_on_disk = VectorOnDisk::new(v, len1);
+            bytes_on_disk = v.into();
             cursor += total_bytes;
         } else {
             let v: Vec<_> = (0..len)
                 .map(|_| deserialize!(T, destination, cursor))
                 .collect();
-            bytes_on_disk = VectorOnDisk::new(v, len1);
+            bytes_on_disk = v.into();
         }
         debug_assert_eq!(cursor as PageOffset, bytes_on_disk.size());
         bytes_on_disk
@@ -487,7 +493,33 @@ impl Serializable for Message {
     }
 }
 
-pub type LeafEntry = OndiskTuple;
+#[derive(Deref, Clone)]
+struct BTreeMapOnDisK<K: Serializable, V: Serializable> {
+    #[deref]
+    inner: BTreeMap<K, V>,
+    size: PageOffset,
+}
+
+impl<K: Serializable, V: Serializable> SizedOnDisk for BTreeMapOnDisK<K, V> {
+    fn size(&self) -> PageOffset {
+        self.size
+    }
+}
+
+impl<K: Serializable + Ord, V: Serializable> Serializable for BTreeMapOnDisK<K, V> {
+    fn serialize(&self, destination: &mut [u8]) {
+        serialize!(self.inner, destination);
+    }
+
+    fn deserialize(src: &[u8]) -> Self {
+        let mut cursor = 0;
+        deserialize_with_var!(inner, BTreeMap<K, V>, src, cursor);
+        Self {
+            inner,
+            size: cursor,
+        }
+    }
+}
 
 #[test]
 fn endian() {
@@ -501,13 +533,13 @@ fn endian() {
     a.serialize(&mut bytes);
     assert_eq!(i32::deserialize(&bytes), a);
 
-    let k = VectorOnDisk::new(vec![1], 1u8);
+    // let k = VectorOnDisk::new(vec![1]);
 }
 
 #[test]
 fn test_serialization() {
     let a: Vec<_> = (-1000..1000).collect();
-    let bs = VectorOnDisk::new(a, 1u16);
+    let bs = VectorOnDisk::<_, u16>::from(a);
     let mut b = vec![0u8; 84000];
     bs.serialize(&mut b);
     let bs1: VectorOnDisk<i32, u16> = VectorOnDisk::deserialize(&b);
