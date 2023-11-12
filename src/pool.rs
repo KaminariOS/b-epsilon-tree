@@ -1,5 +1,5 @@
-use std::{num::NonZeroUsize, path::Path};
 use std::collections::HashSet;
+use std::{num::NonZeroUsize, path::Path};
 
 use lru::LruCache;
 
@@ -16,19 +16,19 @@ pub struct NodeCache {
 }
 
 impl NodeCache {
-    pub fn take(&mut self, page_id: &PageId) -> Node {
+    pub fn acquire(&mut self, page_id: &PageId) -> Node {
         let node = self.get(page_id).clone();
         self.cache.pop(page_id);
         self.taken.insert(*page_id);
         node
     }
 
-    pub fn retur(&mut self, page_id: PageId, mut node: Node) {
+    pub fn release(&mut self, page_id: PageId, mut node: Node) {
         node.dirt();
         self.taken.remove(&page_id);
         self.put(page_id, node);
     }
-    
+
     pub fn new<P: AsRef<Path>>(path: P, create: bool, cap: NonZeroUsize) -> Self {
         let cache = LruCache::new(cap);
         let pager = if create {
@@ -37,7 +37,11 @@ impl NodeCache {
             SimplePager::open(path)
         }
         .unwrap();
-        Self { cache, pager, taken: HashSet::new()}
+        Self {
+            cache,
+            pager,
+            taken: HashSet::new(),
+        }
     }
 
     pub fn get<'a>(&'a mut self, page_id: &PageId) -> &'a Node {
@@ -46,7 +50,9 @@ impl NodeCache {
             return self.cache.get(&page_id).unwrap();
         } else {
             let mut page = Page::default();
-            self.pager.read(page_id, &mut page).expect(&format!("Failed to page: {}", page_id));
+            self.pager
+                .read(page_id, &mut page)
+                .expect(&format!("Failed to page: {}", page_id));
             self.evict_one_if_full();
             let node: Node = page.try_into().unwrap();
             self.cache.put(*page_id, node);
@@ -92,7 +98,7 @@ impl NodeCache {
             None
         };
         if let Some(page) = page {
-            self.pager.write(page_id, &page);
+            self.pager.write(page_id, &page).unwrap();
             self.flush();
         }
     }

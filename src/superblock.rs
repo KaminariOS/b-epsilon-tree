@@ -1,11 +1,12 @@
 use crate::{
-    allocator::{SimpleAllocator, PageAllocator},
+    allocator::{PageAllocator, SimpleAllocator},
     error::Error,
+    node::ChildId,
     page::Page,
     page::PAGESIZE,
     pager::PageId,
     types::{Serializable, SizedOnDisk},
-    wal::Wal, node::ChildId,
+    wal::Wal,
 };
 use ser_derive::SizedOnDisk;
 use std::io::{Read, Seek, SeekFrom};
@@ -84,13 +85,13 @@ impl Superblock {
         self.fd.seek(SeekFrom::Start(SB_PAGE_ID * PAGESIZE))?;
         self.serialize();
         self.fd.write_all((&self.page).into()).unwrap();
-        // flush != fsync, flush only flushes the data from current process to the kernel 
+        // flush != fsync, flush only flushes the data from current process to the kernel
         self.fd.flush().unwrap();
         self.last_flushed_root = self.root;
         Ok(())
     }
 
-    // Precondition: node ID always increments  
+    // Precondition: node ID always increments
     pub fn safe_to_overwrite_in_place(&self, node: ChildId) -> bool {
         node > self.last_flushed_root
     }

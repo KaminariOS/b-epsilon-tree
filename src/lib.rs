@@ -1,8 +1,10 @@
 #![feature(is_sorted)]
+#![feature(btree_cursors)]
+
 mod allocator;
 mod mini_allocator;
 
-mod btree;
+mod betree;
 mod log;
 mod memtable;
 #[macro_use]

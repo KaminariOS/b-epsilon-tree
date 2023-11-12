@@ -1,4 +1,4 @@
-use crate::types::{MessageData, Serializable, VectorOnDisk, MessageType};
+use crate::types::{MessageData, MessageType, Serializable};
 use core::mem::size_of;
 use std::collections::{BTreeMap, HashMap};
 
@@ -9,6 +9,7 @@ use crate::types::{OnDiskKey, OnDiskValue, PageOffset, SizedOnDisk};
 use ser_derive::SizedOnDisk;
 pub type ChildId = PageId;
 pub type MsgBuffer = BTreeMap<OnDiskKey, MessageData>;
+pub type PivotMap = BTreeMap<OnDiskKey, ChildId>;
 
 const MAX_MSG_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 const MAX_KEY_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
@@ -43,7 +44,7 @@ impl LeafNode {
     }
 
     pub fn apply(&mut self, key: OnDiskKey, msg: MessageData) {
-        let MessageData {ty, val} = msg;
+        let MessageData { ty, val } = msg;
         match ty {
             MessageType::Insert => {
                 self.map.insert(key, val);
@@ -66,17 +67,18 @@ impl LeafNode {
             if let Some((key, value)) = self.map.pop_last() {
                 right_leaf.map.insert(key, value);
             } else {
-                break
+                break;
             }
-        } 
+        }
         (
-        Node {
-            common_data: NodeCommon {
-                root: false,
-                dirty: true,
+            Node {
+                common_data: NodeCommon {
+                    root: false,
+                    dirty: true,
+                },
+                node_inner: NodeType::Leaf(right_leaf),
             },
-            node_inner: NodeType::Leaf(right_leaf)
-        }, self.map.last_key_value().unwrap().0.clone()
+            self.map.last_key_value().unwrap().0.clone(),
         )
         // (self.clone(), OnDiskKey::new(vec![]))
     }
@@ -99,8 +101,8 @@ type PivotsLength = u16;
 
 #[derive(SizedOnDisk, Clone, Debug)]
 pub struct InternelNode {
-    pivots: VectorOnDisk<OnDiskKey, PivotsLength>,
-    pub children: VectorOnDisk<ChildId, PivotsLength>,
+    pub pivot_map: BTreeMap<OnDiskKey, ChildId>,
+    rightmost_child: ChildId,
     pub msg_buffer: MsgBuffer,
     epsilon: f32,
 }
@@ -117,7 +119,11 @@ impl InternelNode {
     fn get_msg_buffer_avail(&self) -> PageOffset {
         let cap = self.get_msg_buffer_capacity();
         let current_size = self.msg_buffer.size();
-        if cap >= current_size {cap - current_size} else {0}
+        if cap >= current_size {
+            cap - current_size
+        } else {
+            0
+        }
     }
 
     pub fn get_pivots_capacity(&self) -> PageOffset {
@@ -125,7 +131,7 @@ impl InternelNode {
     }
 
     pub fn get_pivots_avail(&self) -> PageOffset {
-        self.get_pivots_capacity() - self.pivots.size() - self.children.size()
+        self.get_pivots_capacity() - self.pivot_map.size()
     }
 
     fn get_meta_size(&self) -> PageOffset {
@@ -149,70 +155,115 @@ impl InternelNode {
         // debug_assert!(self.msg_buffer.size() <= self.get_msg_buffer_capacity());
     }
 
-    pub fn find_child_with_most_msgs(&self) -> usize {
-        let mut record: HashMap<usize, PageOffset> = HashMap::new();
+    pub fn find_child_with_most_msgs(&self) -> ChildId {
+        let mut record: HashMap<ChildId, PageOffset> = HashMap::new();
         self.msg_buffer.iter().for_each(|(k, v)| {
-            let c = self.pivots.binary_search(&k).unwrap_or_else(|x| x);
-            *record.entry(c).or_default() += k.size() + v.size();
+            let child_id = self.find_child_with_key(k);
+            *record.entry(child_id).or_default() += k.size() + v.size();
         });
         let (child, size) = record.into_iter().max_by_key(|(_x, size)| *size).unwrap();
         child
     }
 
-    pub fn collect_msg_to_child(&mut self, c: usize) -> MsgBuffer {
-        let v: Vec<_> = self.msg_buffer.iter_mut().filter_map(|(k, v)| 
-                                              if self.pivots.binary_search(k).unwrap_or_else(|x| x) == c {Some(k.clone())} else {None}
-                                   ).collect();
-            v.into_iter().filter_map(|k| self.msg_buffer.remove_entry(&k)).collect()
+    fn find_child_with_key(&self, k: &OnDiskKey) -> ChildId {
+        let c = self.pivot_map.lower_bound(std::ops::Bound::Included(&k));
+        c.value().map(|&i| i).unwrap_or(self.rightmost_child)
     }
 
-    pub fn new_internel_root(pivots: Vec<OnDiskKey>, children: Vec<ChildId>) -> Self {
+    pub fn collect_msg_to_child(&mut self, c: ChildId) -> MsgBuffer {
+        let keys: Vec<_> = self
+            .msg_buffer
+            .iter()
+            .filter(|(k, _v)| self.find_child_with_key(k) == c)
+            .map(|(k, _v)| k.clone())
+            .collect();
+        let mut msgs = MsgBuffer::new();
+        keys.into_iter().for_each(|k| {
+            let v = self.msg_buffer.remove(&k).unwrap();
+            msgs.insert(k, v);
+        });
+        msgs
+    }
+
+    pub fn new_internel_root(
+        pivot_map: BTreeMap<OnDiskKey, ChildId>,
+        rightmost_child: ChildId,
+    ) -> Self {
         Self {
-            pivots: VectorOnDisk::new(pivots, 1 as _),
-            children: VectorOnDisk::new(children, 1 as _),
+            pivot_map,
+            rightmost_child,
             msg_buffer: BTreeMap::new(),
             epsilon: 0.5,
         }
     }
 
-    pub fn update_pivots(&mut self, 
-                         child_index: usize, child_id: ChildId, new_pivots: Vec<(OnDiskKey, ChildId)>) {
-        debug_assert!(self.pivots.is_sorted());
-        self.children[child_index] = child_id;
-        self.pivots.splice(child_index..child_index, new_pivots.iter().map(|p| p.0.clone()));
-        self.children.splice(child_index + 1..child_index + 1, new_pivots.iter().map(|p| p.1));
-        debug_assert!(self.pivots.is_sorted());
+    pub fn update_pivots(
+        &mut self,
+        old_child: ChildId,
+        child_id: ChildId,
+        new_pivots: Vec<(OnDiskKey, ChildId)>,
+    ) {
+        if new_pivots.is_empty() {
+            if self.rightmost_child == child_id {
+                self.rightmost_child = child_id;
+            } else {
+                self.pivot_map
+                    .iter_mut()
+                    .find(|(k, v)| **v == old_child)
+                    .map(|(_k, v)| *v = child_id);
+            }
+        } else {
+            let (mut pivot_map, rightmost_child) = convert_pivot(child_id, new_pivots);
+            let cursor = self.pivot_map.lower_bound(std::ops::Bound::Included(
+                pivot_map.last_key_value().unwrap().0,
+            ));
+            if let Some(k) = cursor.key().map(|x| x.clone()) {
+                self.pivot_map.insert(k, rightmost_child);
+            } else {
+                self.rightmost_child = rightmost_child;
+            }
+            self.pivot_map.append(&mut pivot_map);
+        }
     }
 
     pub fn split(&mut self) -> (Node, OnDiskKey) {
         // match &mut self.node_inner {
         // }
-        debug_assert!(self.pivots.is_sorted());
-        debug_assert!(self.pivots.len() >= 3);
-        let len = self.pivots.len();
+        let len = self.pivot_map.len();
+        debug_assert!(len >= 3);
         let median = len / 2;
-        let msgs = self.msg_buffer.split_off(&self.pivots[median + 1]);
-        let new_pivots = self.pivots.split_off(median + 1);
-        let median_key = self.pivots.pop().unwrap();
-        let new_children = self.children.split_off(median + 1);
-
+        let key_next = self.pivot_map.keys().nth(median + 1).unwrap().clone();
+        let msgs = self.msg_buffer.split_off(&key_next);
+        let new_pivots = self.pivot_map.split_off(&key_next);
+        let (median_key, rightmost_child) = self.pivot_map.pop_last().unwrap().clone();
+        let original_rightmost = self.rightmost_child;
+        self.rightmost_child = rightmost_child;
         (
-        Node {
-            common_data: COM,
-            node_inner: NodeType::Internel(
-                InternelNode::new(self.epsilon, new_pivots, new_children, msgs)
-                )
-        }, median_key
+            Node {
+                common_data: COM,
+                node_inner: NodeType::Internel(InternelNode::new(
+                    self.epsilon,
+                    new_pivots,
+                    original_rightmost,
+                    msgs,
+                )),
+            },
+            median_key,
         )
         // (self.clone(), OnDiskKey::new(vec![]))
     }
 
-    fn new(epsilon: f32, pivots: Vec<OnDiskKey>, children: Vec<ChildId>, msg_buffer: MsgBuffer) -> Self {
+    fn new(
+        epsilon: f32,
+        pivot_map: PivotMap,
+        rightmost_child: ChildId,
+        msg_buffer: MsgBuffer,
+    ) -> Self {
         Self {
             epsilon,
             msg_buffer,
-            pivots: pivots.into(),
-            children: children.into()
+            pivot_map,
+            rightmost_child,
         }
     }
 }
@@ -221,21 +272,21 @@ impl Serializable for InternelNode {
     fn serialize(&self, destination: &mut [u8]) {
         let mut cursor = 0;
         serialize!(self.epsilon, destination, cursor);
-        serialize!(self.pivots, destination, cursor);
-        serialize!(self.children, destination, cursor);
+        serialize!(self.pivot_map, destination, cursor);
+        serialize!(self.rightmost_child, destination, cursor);
         serialize!(self.msg_buffer, destination, cursor);
     }
 
     fn deserialize(src: &[u8]) -> Self {
         let mut cursor = 0;
         let epsilon = deserialize!(f32, src, cursor);
-        let pivots = deserialize!(VectorOnDisk<OnDiskKey, PivotsLength>, src, cursor);
-        let children = deserialize!(VectorOnDisk<ChildId, PivotsLength>, src, cursor);
-        let msg_buffer = deserialize!(BTreeMap<OnDiskKey, MessageData>, src, cursor);
+        let pivot_map = deserialize!(PivotMap, src, cursor);
+        let rightmost_child = deserialize!(ChildId, src, cursor);
+        let msg_buffer = deserialize!(MsgBuffer, src, cursor);
         Self {
             epsilon,
-            pivots,
-            children,
+            pivot_map,
+            rightmost_child,
             msg_buffer,
         }
     }
@@ -317,14 +368,17 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new_internel_root(left: ChildId, pivots: &[(OnDiskKey, ChildId)]) -> Self {
-        let mut children = vec![left];
-        pivots.iter().for_each(|p| 
-                               children.push(p.1));
-        let pivots = pivots.iter().map(|p| p.0.clone()).collect();
+    pub fn new_internel_root(child_id: ChildId, pivots: Vec<(OnDiskKey, ChildId)>) -> Self {
+        let (pivot_map, rightmost_child) = convert_pivot(child_id, pivots);
         Self {
-            common_data: NodeCommon { root: true, dirty: true },
-            node_inner: NodeType::Internel(InternelNode::new_internel_root(pivots, children))
+            common_data: NodeCommon {
+                root: true,
+                dirty: true,
+            },
+            node_inner: NodeType::Internel(InternelNode::new_internel_root(
+                pivot_map,
+                rightmost_child,
+            )),
         }
     }
 
@@ -362,31 +416,28 @@ impl Node {
     pub fn get_key(&self, key: &OnDiskKey) -> Option<&OnDiskValue> {
         match &self.node_inner {
             NodeType::Internel(internal) => {
-                internal.msg_buffer.get(key).and_then(|MessageData {ty, val}| match ty {
-                    MessageType::Insert => {
-                        Some(val)
-                    }
-                    MessageType::Delete => {
-                        None
-                    }
-                    MessageType::Upsert => {
-                        // Need to flush this msg
-                        unimplemented!()
-                    }
-                })
+                internal
+                    .msg_buffer
+                    .get(key)
+                    .and_then(|MessageData { ty, val }| match ty {
+                        MessageType::Insert => Some(val),
+                        MessageType::Delete => None,
+                        MessageType::Upsert => {
+                            // Need to flush this msg
+                            unimplemented!()
+                        }
+                    })
             }
-            NodeType::Leaf(leaf) => {
-                leaf.map.get(key)
-            },
-            _ => {unimplemented!()}
+            NodeType::Leaf(leaf) => leaf.map.get(key),
+            _ => {
+                unimplemented!()
+            }
         }
     }
 
     pub fn need_pre_split(&self, msg_size: PageOffset) -> bool {
         match &self.node_inner {
-            NodeType::Leaf(_leaf) => {
-                false
-            }
+            NodeType::Leaf(_leaf) => false,
             NodeType::Internel(internel) => {
                 if !internel.is_msg_buffer_full(msg_size) {
                     false
@@ -397,24 +448,22 @@ impl Node {
                         false
                     }
                     // if pivot full, split pivot; else flush msg buffer
-                }             
+                }
             }
-            _ => unimplemented!()
-            }
+            _ => unimplemented!(),
+        }
     }
 
     pub fn well_formed(&self) -> bool {
         match &self.node_inner {
             NodeType::Internel(internel) => {
                 !internel.is_pivots_full() && !internel.is_msg_buffer_full(0)
-            },
-            NodeType::Leaf(leaf) => {
-                leaf.is_node_full() 
-            },
-            _ => unimplemented!()
+            }
+            NodeType::Leaf(leaf) => leaf.is_node_full(),
+            _ => unimplemented!(),
         }
     }
-    // Return right sibling and new parent 
+    // Return right sibling and new parent
 }
 
 const NODE_META_OFFSET: usize = 0;
@@ -448,4 +497,20 @@ impl TryFrom<&Node> for Page {
         serialize!(value.node_inner, page, cursor);
         Ok(page)
     }
+}
+
+pub fn convert_pivot(child_id: ChildId, pivots: Vec<(OnDiskKey, ChildId)>) -> (PivotMap, ChildId) {
+    let mut map = PivotMap::new();
+    for i in 0..pivots.len() {
+        map.insert(
+            pivots[i].0.clone(),
+            if i == 0 { child_id } else { pivots[i - 1].1 },
+        );
+    }
+    let right = if pivots.is_empty() {
+        child_id
+    } else {
+        pivots.last().unwrap().1
+    };
+    (map, right)
 }
