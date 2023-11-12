@@ -1,11 +1,11 @@
 use crate::{
-    allocator::SimpleAllocator,
+    allocator::{SimpleAllocator, PageAllocator},
     error::Error,
     page::Page,
     page::PAGESIZE,
     pager::PageId,
     types::{Serializable, SizedOnDisk},
-    wal::Wal,
+    wal::Wal, node::ChildId,
 };
 use ser_derive::SizedOnDisk;
 use std::io::{Read, Seek, SeekFrom};
@@ -25,6 +25,7 @@ const MAGIC: u64 = 0x12f81ac;
 /// Wal
 pub struct Superblock {
     pub root: PageId,
+    pub last_flushed_root: PageId,
     last_checkpoint: u64,
     wal: Wal,
     pub storage_filename: String,
@@ -38,6 +39,10 @@ const META_EXT: &str = ".storage";
 pub const SB_PAGE_ID: u64 = 0;
 
 impl Superblock {
+    pub fn alloc(&mut self) -> PageId {
+        self.allocator.alloc()
+    }
+
     fn serialize(&mut self) {
         let mut cursor = 0;
         let destination: &mut [u8] = (&mut self.page).into();
@@ -45,6 +50,7 @@ impl Superblock {
         serialize!(self.root, destination, cursor);
         serialize!(self.last_checkpoint, destination, cursor);
         serialize!(self.storage_filename, destination, cursor);
+        serialize!(self.allocator, destination, cursor);
     }
 
     fn deserialize(page: Page, fd: File) -> Self {
@@ -56,10 +62,12 @@ impl Superblock {
         deserialize_with_var!(last_checkpoint, u64, src, cursor);
         deserialize_with_var!(storage_filename, String, src, cursor);
         deserialize_with_var!(allocator, SimpleAllocator, src, cursor);
+        println!("Deseri: {:?}", allocator);
         deserialize_with_var!(wal, Wal, src, cursor);
         Self {
             root,
             last_checkpoint,
+            last_flushed_root: root,
             storage_filename,
             allocator,
             wal,
@@ -78,7 +86,13 @@ impl Superblock {
         self.fd.write_all((&self.page).into()).unwrap();
         // flush != fsync, flush only flushes the data from current process to the kernel 
         self.fd.flush().unwrap();
+        self.last_flushed_root = self.root;
         Ok(())
+    }
+
+    // Precondition: node ID always increments  
+    pub fn safe_to_overwrite_in_place(&self, node: ChildId) -> bool {
+        node > self.last_flushed_root
     }
 
     pub fn flush_wal(&mut self) {}
@@ -105,6 +119,7 @@ impl Superblock {
             allocator,
             wal,
             root: 0,
+            last_flushed_root: 0,
             last_checkpoint: 0,
             storage_filename,
             fd,

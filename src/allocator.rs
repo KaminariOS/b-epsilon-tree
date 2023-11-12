@@ -14,7 +14,7 @@ pub trait PageAllocator {
     fn dealloc(&mut self, _addr: PageId) {}
 }
 
-#[derive(Default, SizedOnDisk, Clone)]
+#[derive(Default, SizedOnDisk, Clone, Debug)]
 pub struct SimpleAllocator {
     counter: PageId,
 }

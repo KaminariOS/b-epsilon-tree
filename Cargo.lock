@@ -36,6 +36,7 @@ dependencies = [
  "num-derive",
  "num-traits",
  "rand",
+ "rand_chacha",
  "ser_derive",
 ]
 

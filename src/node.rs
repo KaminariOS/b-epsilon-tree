@@ -1,6 +1,6 @@
-use crate::types::{MessageData, Serializable, VectorOnDisk};
+use crate::types::{MessageData, Serializable, VectorOnDisk, MessageType};
 use core::mem::size_of;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::error::Error;
 use crate::page::{Page, PAGESIZE};
@@ -8,12 +8,13 @@ use crate::pager::PageId;
 use crate::types::{OnDiskKey, OnDiskValue, PageOffset, SizedOnDisk};
 use ser_derive::SizedOnDisk;
 pub type ChildId = PageId;
+pub type MsgBuffer = BTreeMap<OnDiskKey, MessageData>;
 
 const MAX_MSG_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 const MAX_KEY_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 const MAX_VAL_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 
-#[derive(SizedOnDisk, Clone)]
+#[derive(SizedOnDisk, Clone, Debug)]
 pub struct LeafNode {
     map: BTreeMap<OnDiskKey, OnDiskValue>,
 }
@@ -26,19 +27,58 @@ impl LeafNode {
     }
 
     fn get_meta_size(&self) -> PageOffset {
-        true.size()
+        true.size() + COM.size()
     }
 
     fn get_kv_avail(&self) -> PageOffset {
         self.get_kv_capacity() - self.map.size()
     }
 
-    fn get_kv_capacity(&self) -> PageOffset {
+    pub fn get_kv_capacity(&self) -> PageOffset {
         PAGESIZE as PageOffset - self.get_meta_size()
     }
 
-    fn is_node_full(&self, new_entry_size: PageOffset) -> bool {
-        self.get_kv_avail() < new_entry_size
+    pub fn is_node_full(&self) -> bool {
+        self.size() > self.get_kv_capacity()
+    }
+
+    pub fn apply(&mut self, key: OnDiskKey, msg: MessageData) {
+        let MessageData {ty, val} = msg;
+        match ty {
+            MessageType::Insert => {
+                self.map.insert(key, val);
+            }
+            MessageType::Delete => {
+                debug_assert!(val.is_empty());
+                self.map.remove(&key);
+                // TODO: Need merging
+            }
+            MessageType::Upsert => {
+                // TODO: Byte slice addition?
+                unimplemented!()
+            }
+        }
+    }
+
+    pub fn split(&mut self) -> (Node, OnDiskKey) {
+        let mut right_leaf = Self::new();
+        while !right_leaf.is_node_full() && self.map.size() > self.get_kv_capacity() / 2 {
+            if let Some((key, value)) = self.map.pop_last() {
+                right_leaf.map.insert(key, value);
+            } else {
+                break
+            }
+        } 
+        (
+        Node {
+            common_data: NodeCommon {
+                root: false,
+                dirty: true,
+            },
+            node_inner: NodeType::Leaf(right_leaf)
+        }, self.map.last_key_value().unwrap().0.clone()
+        )
+        // (self.clone(), OnDiskKey::new(vec![]))
     }
 }
 
@@ -57,29 +97,35 @@ impl Serializable for LeafNode {
 
 type PivotsLength = u16;
 
-#[derive(SizedOnDisk, Clone)]
-struct InternelNode {
+#[derive(SizedOnDisk, Clone, Debug)]
+pub struct InternelNode {
     pivots: VectorOnDisk<OnDiskKey, PivotsLength>,
-    children: VectorOnDisk<ChildId, PivotsLength>,
-    msg_buffer: BTreeMap<OnDiskKey, MessageData>,
+    pub children: VectorOnDisk<ChildId, PivotsLength>,
+    pub msg_buffer: MsgBuffer,
     epsilon: f32,
 }
 
 impl InternelNode {
-    fn get_msg_buffer_capacity(&self) -> PageOffset {
+    pub fn get_msg_buffer_capacity(&self) -> PageOffset {
         (self.get_data_size() as f32 * self.epsilon) as PageOffset
     }
 
-    fn get_msg_buffer_avail(&self) -> PageOffset {
-        self.get_msg_buffer_capacity() - self.msg_buffer.size()
+    pub fn merge_buffers(&mut self, mut msgs: MsgBuffer) {
+        self.msg_buffer.append(&mut msgs);
     }
 
-    fn get_pivots_capacity(&self) -> PageOffset {
+    fn get_msg_buffer_avail(&self) -> PageOffset {
+        let cap = self.get_msg_buffer_capacity();
+        let current_size = self.msg_buffer.size();
+        if cap >= current_size {cap - current_size} else {0}
+    }
+
+    pub fn get_pivots_capacity(&self) -> PageOffset {
         self.get_data_size() - self.get_msg_buffer_capacity()
     }
 
-    fn get_pivots_avail(&self) -> PageOffset {
-        self.get_pivots_capacity() - self.pivots.size()
+    pub fn get_pivots_avail(&self) -> PageOffset {
+        self.get_pivots_capacity() - self.pivots.size() - self.children.size()
     }
 
     fn get_meta_size(&self) -> PageOffset {
@@ -89,15 +135,85 @@ impl InternelNode {
     fn get_data_size(&self) -> PageOffset {
         PAGESIZE as PageOffset - COM.size() - self.get_meta_size()
     }
-}
 
-impl InternelNode {
     pub fn is_msg_buffer_full(&self, new_entry_size: PageOffset) -> bool {
-        self.get_msg_buffer_avail() < new_entry_size
+        self.get_msg_buffer_avail() == 0 || self.get_msg_buffer_avail() < new_entry_size
     }
 
     pub fn is_pivots_full(&self) -> bool {
         self.get_pivots_avail() < MAX_KEY_SIZE + size_of::<ChildId>()
+    }
+
+    pub fn insert_msg(&mut self, key: OnDiskKey, msg: MessageData) {
+        self.msg_buffer.insert(key, msg);
+        // debug_assert!(self.msg_buffer.size() <= self.get_msg_buffer_capacity());
+    }
+
+    pub fn find_child_with_most_msgs(&self) -> usize {
+        let mut record: HashMap<usize, PageOffset> = HashMap::new();
+        self.msg_buffer.iter().for_each(|(k, v)| {
+            let c = self.pivots.binary_search(&k).unwrap_or_else(|x| x);
+            *record.entry(c).or_default() += k.size() + v.size();
+        });
+        let (child, size) = record.into_iter().max_by_key(|(_x, size)| *size).unwrap();
+        child
+    }
+
+    pub fn collect_msg_to_child(&mut self, c: usize) -> MsgBuffer {
+        let v: Vec<_> = self.msg_buffer.iter_mut().filter_map(|(k, v)| 
+                                              if self.pivots.binary_search(k).unwrap_or_else(|x| x) == c {Some(k.clone())} else {None}
+                                   ).collect();
+            v.into_iter().filter_map(|k| self.msg_buffer.remove_entry(&k)).collect()
+    }
+
+    pub fn new_internel_root(pivots: Vec<OnDiskKey>, children: Vec<ChildId>) -> Self {
+        Self {
+            pivots: VectorOnDisk::new(pivots, 1 as _),
+            children: VectorOnDisk::new(children, 1 as _),
+            msg_buffer: BTreeMap::new(),
+            epsilon: 0.5,
+        }
+    }
+
+    pub fn update_pivots(&mut self, 
+                         child_index: usize, child_id: ChildId, new_pivots: Vec<(OnDiskKey, ChildId)>) {
+        debug_assert!(self.pivots.is_sorted());
+        self.children[child_index] = child_id;
+        self.pivots.splice(child_index..child_index, new_pivots.iter().map(|p| p.0.clone()));
+        self.children.splice(child_index + 1..child_index + 1, new_pivots.iter().map(|p| p.1));
+        debug_assert!(self.pivots.is_sorted());
+    }
+
+    pub fn split(&mut self) -> (Node, OnDiskKey) {
+        // match &mut self.node_inner {
+        // }
+        debug_assert!(self.pivots.is_sorted());
+        debug_assert!(self.pivots.len() >= 3);
+        let len = self.pivots.len();
+        let median = len / 2;
+        let msgs = self.msg_buffer.split_off(&self.pivots[median + 1]);
+        let new_pivots = self.pivots.split_off(median + 1);
+        let median_key = self.pivots.pop().unwrap();
+        let new_children = self.children.split_off(median + 1);
+
+        (
+        Node {
+            common_data: COM,
+            node_inner: NodeType::Internel(
+                InternelNode::new(self.epsilon, new_pivots, new_children, msgs)
+                )
+        }, median_key
+        )
+        // (self.clone(), OnDiskKey::new(vec![]))
+    }
+
+    fn new(epsilon: f32, pivots: Vec<OnDiskKey>, children: Vec<ChildId>, msg_buffer: MsgBuffer) -> Self {
+        Self {
+            epsilon,
+            msg_buffer,
+            pivots: pivots.into(),
+            children: children.into()
+        }
     }
 }
 
@@ -125,8 +241,8 @@ impl Serializable for InternelNode {
     }
 }
 
-#[derive(Clone)]
-enum NodeType {
+#[derive(Clone, Debug)]
+pub enum NodeType {
     Leaf(LeafNode),
     Internel(InternelNode),
     Test,
@@ -170,7 +286,7 @@ impl Serializable for NodeType {
     }
 }
 
-#[derive(Default, Copy, SizedOnDisk, Clone)]
+#[derive(Default, Copy, SizedOnDisk, Clone, Debug)]
 struct NodeCommon {
     root: bool,
     dirty: bool,
@@ -194,12 +310,24 @@ impl Serializable for NodeCommon {
     }
 }
 
+#[derive(Clone, SizedOnDisk, Debug)]
 pub struct Node {
-    node_inner: NodeType,
+    pub node_inner: NodeType,
     common_data: NodeCommon,
 }
 
 impl Node {
+    pub fn new_internel_root(left: ChildId, pivots: &[(OnDiskKey, ChildId)]) -> Self {
+        let mut children = vec![left];
+        pivots.iter().for_each(|p| 
+                               children.push(p.1));
+        let pivots = pivots.iter().map(|p| p.0.clone()).collect();
+        Self {
+            common_data: NodeCommon { root: true, dirty: true },
+            node_inner: NodeType::Internel(InternelNode::new_internel_root(pivots, children))
+        }
+    }
+
     pub fn dirty(&self) -> bool {
         self.common_data.dirty
     }
@@ -222,6 +350,71 @@ impl Node {
             node_inner: NodeType::Leaf(LeafNode::new()),
         }
     }
+
+    pub fn is_root(&self) -> bool {
+        self.common_data.root
+    }
+
+    pub fn unset_root(&mut self) {
+        self.common_data.root = false;
+    }
+
+    pub fn get_key(&self, key: &OnDiskKey) -> Option<&OnDiskValue> {
+        match &self.node_inner {
+            NodeType::Internel(internal) => {
+                internal.msg_buffer.get(key).and_then(|MessageData {ty, val}| match ty {
+                    MessageType::Insert => {
+                        Some(val)
+                    }
+                    MessageType::Delete => {
+                        None
+                    }
+                    MessageType::Upsert => {
+                        // Need to flush this msg
+                        unimplemented!()
+                    }
+                })
+            }
+            NodeType::Leaf(leaf) => {
+                leaf.map.get(key)
+            },
+            _ => {unimplemented!()}
+        }
+    }
+
+    pub fn need_pre_split(&self, msg_size: PageOffset) -> bool {
+        match &self.node_inner {
+            NodeType::Leaf(_leaf) => {
+                false
+            }
+            NodeType::Internel(internel) => {
+                if !internel.is_msg_buffer_full(msg_size) {
+                    false
+                } else {
+                    if internel.is_pivots_full() {
+                        true
+                    } else {
+                        false
+                    }
+                    // if pivot full, split pivot; else flush msg buffer
+                }             
+            }
+            _ => unimplemented!()
+            }
+    }
+
+    pub fn well_formed(&self) -> bool {
+        match &self.node_inner {
+            NodeType::Internel(internel) => {
+                !internel.is_pivots_full() && !internel.is_msg_buffer_full(0)
+            },
+            NodeType::Leaf(leaf) => {
+                leaf.is_node_full() 
+            },
+            _ => unimplemented!()
+        }
+    }
+    // Return right sibling and new parent 
 }
 
 const NODE_META_OFFSET: usize = 0;

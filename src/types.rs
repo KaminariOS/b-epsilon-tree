@@ -39,6 +39,12 @@ impl From<VectorOnDisk<u8, OndiskKeyLength>> for String {
     }
 }
 
+impl<T: Serializable> From<Vec<T>> for VectorOnDisk<T, OndiskKeyLength> {
+    fn from(value: Vec<T>) -> Self {
+        Self::new(value, 1 as _)
+    }
+}
+
 #[macro_export]
 macro_rules! SizedOnDiskImplForPrimitive {
     ($primitive_ty:ty) => {
@@ -133,7 +139,7 @@ pub struct VectorOnDisk<T: Serializable, L: num::PrimInt + Serializable> {
 }
 
 impl<T: Serializable, L: num::PrimInt + Serializable> VectorOnDisk<T, L> {
-    fn new(elements: Vec<T>, _u: L) -> Self {
+    pub fn new(elements: Vec<T>, _u: L) -> Self {
         Self {
             elements,
             _p: std::marker::PhantomData,
@@ -143,7 +149,7 @@ impl<T: Serializable, L: num::PrimInt + Serializable> VectorOnDisk<T, L> {
 
 impl<T: Serializable, L: num::PrimInt + Serializable> SizedOnDisk for VectorOnDisk<T, L> {
     fn size(&self) -> PageOffset {
-        (size_of::<L>() + self.elements.len() * size_of::<T>()) as PageOffset
+        (size_of::<L>() + self.elements.iter().map(|e| e.size()).sum::<PageOffset>()) as PageOffset
     }
 }
 
@@ -156,7 +162,7 @@ pub struct OnDiskKey {
 }
 
 impl OnDiskKey {
-    fn new(key: Vec<u8>) -> Self {
+    pub fn new(key: Vec<u8>) -> Self {
         Self {
             bytes: VectorOnDisk::new(key, 0 as OndiskKeyLength),
         }
@@ -176,7 +182,7 @@ impl OnDiskKey {
     }
 }
 
-#[derive(SizedOnDisk, Clone)]
+#[derive(SizedOnDisk, Clone, Deref, DerefMut, Debug)]
 pub struct OnDiskValue {
     // pub flags: OndiskFlags,
     pub bytes: VectorOnDisk<u8, OndiskValueLength>,
@@ -206,7 +212,7 @@ pub struct OndiskTuple {
     message: VectorOnDisk<u8, OndiskMessageLength>,
 }
 
-#[derive(FromPrimitive, Clone, Copy)]
+#[derive(FromPrimitive, Clone, Copy, Debug)]
 pub enum MessageType {
     Insert = 1,
     Delete,
@@ -256,10 +262,10 @@ impl SizedOnDisk for bool {
     }
 }
 
-#[derive(SizedOnDisk, Clone)]
+#[derive(SizedOnDisk, Clone, Debug)]
 pub struct MessageData {
-    val: OnDiskValue,
-    ty: MessageType,
+    pub val: OnDiskValue,
+    pub ty: MessageType,
 }
 
 impl Serializable for MessageData {

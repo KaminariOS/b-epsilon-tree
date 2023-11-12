@@ -1,3 +1,4 @@
+#![feature(is_sorted)]
 mod allocator;
 mod mini_allocator;
 
