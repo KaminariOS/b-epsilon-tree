@@ -68,6 +68,10 @@ impl LeafNode {
         }
     }
 
+    fn well_formed(&self) -> bool {
+        !self.is_node_full()
+    }
+
     pub fn split(&mut self) -> (Node, OnDiskKey) {
         let mut right_leaf = Self::new();
         while !right_leaf.is_node_full() && self.map.size() > self.get_kv_capacity() / 2 {
@@ -77,22 +81,23 @@ impl LeafNode {
                 break;
             }
         }
-        (
-            Node {
-                common_data: NodeCommon {
-                    root: false,
-                    dirty: true,
-                },
-                node_inner: NodeType::Leaf(right_leaf),
+        let new_node = Node {
+            common_data: NodeCommon {
+                root: false,
+                dirty: true,
             },
-            self.map.last_key_value().unwrap().0.clone(),
-        )
+            node_inner: NodeType::Leaf(right_leaf),
+        };
+        debug_assert!(new_node.well_formed());
+        debug_assert!(self.well_formed());
+        (new_node, self.map.last_key_value().unwrap().0.clone())
         // (self.clone(), OnDiskKey::new(vec![]))
     }
 }
 
 impl Serializable for LeafNode {
     fn serialize(&self, destination: &mut [u8]) {
+        debug_assert!(self.well_formed());
         let mut cursor = 0;
         serialize!(self.map, destination, cursor);
     }
@@ -123,6 +128,10 @@ impl InternalNode {
         self.msg_buffer.append(&mut msgs);
     }
 
+    pub fn well_formed(&self) -> bool {
+        !self.is_pivots_full() && !self.is_msg_buffer_full()
+    }
+
     fn get_msg_buffer_avail(&self) -> PageOffset {
         let cap = self.get_msg_buffer_capacity();
         let current_size = self.msg_buffer.size();
@@ -149,8 +158,8 @@ impl InternalNode {
         PAGESIZE as PageOffset - COM.size() - self.get_meta_size()
     }
 
-    pub fn is_msg_buffer_full(&self, new_entry_size: PageOffset) -> bool {
-        self.get_msg_buffer_avail() == 0 || self.get_msg_buffer_avail() < new_entry_size
+    pub fn is_msg_buffer_full(&self) -> bool {
+        self.get_msg_buffer_capacity() >= self.msg_buffer.size()
     }
 
     pub fn is_pivots_full(&self) -> bool {
@@ -256,18 +265,18 @@ impl InternalNode {
         msg.map(|(k, m)| self.msg_buffer.insert(k, m));
         let original_rightmost = self.rightmost_child;
         self.rightmost_child = rightmost_child;
-        (
-            Node {
-                common_data: COM,
-                node_inner: NodeType::Internal(InternalNode::new(
-                    self.epsilon,
-                    new_pivots,
-                    original_rightmost,
-                    msgs,
-                )),
-            },
-            median_key,
-        )
+        let new_node = Node {
+            common_data: COM,
+            node_inner: NodeType::Internal(InternalNode::new(
+                self.epsilon,
+                new_pivots,
+                original_rightmost,
+                msgs,
+            )),
+        };
+        debug_assert!(self.well_formed());
+        debug_assert!(new_node.well_formed());
+        (new_node, median_key)
         // (self.clone(), OnDiskKey::new(vec![]))
     }
 
@@ -288,6 +297,7 @@ impl InternalNode {
 
 impl Serializable for InternalNode {
     fn serialize(&self, destination: &mut [u8]) {
+        debug_assert!(self.well_formed());
         let mut cursor = 0;
         serialize!(self.epsilon, destination, cursor);
         serialize!(self.pivot_map, destination, cursor);
@@ -301,12 +311,14 @@ impl Serializable for InternalNode {
         let pivot_map = deserialize!(PivotMap, src, cursor);
         let rightmost_child = deserialize!(ChildId, src, cursor);
         let msg_buffer = deserialize!(MsgBuffer, src, cursor);
-        Self {
+        let new_node = Self {
             epsilon,
             pivot_map,
             rightmost_child,
             msg_buffer,
-        }
+        };
+        debug_assert!(new_node.well_formed());
+        new_node
     }
 }
 
@@ -453,31 +465,29 @@ impl Node {
         }
     }
 
-    pub fn need_pre_split(&self, msg_size: PageOffset) -> bool {
-        match &self.node_inner {
-            NodeType::Leaf(_leaf) => false,
-            NodeType::Internal(internel) => {
-                if !internel.is_msg_buffer_full(msg_size) {
-                    false
-                } else {
-                    if internel.is_pivots_full() {
-                        true
-                    } else {
-                        false
-                    }
-                    // if pivot full, split pivot; else flush msg buffer
-                }
-            }
-            _ => unimplemented!(),
-        }
-    }
+    // pub fn need_pre_split(&self, msg_size: PageOffset) -> bool {
+    //     match &self.node_inner {
+    //         NodeType::Leaf(_leaf) => false,
+    //         NodeType::Internal(internel) => {
+    //             if !internel.is_msg_buffer_full(msg_size) {
+    //                 false
+    //             } else {
+    //                 if internel.is_pivots_full() {
+    //                     true
+    //                 } else {
+    //                     false
+    //                 }
+    //                 // if pivot full, split pivot; else flush msg buffer
+    //             }
+    //         }
+    //         _ => unimplemented!(),
+    //     }
+    // }
 
     pub fn well_formed(&self) -> bool {
         match &self.node_inner {
-            NodeType::Internal(internel) => {
-                !internel.is_pivots_full() && !internel.is_msg_buffer_full(0)
-            }
-            NodeType::Leaf(leaf) => leaf.is_node_full(),
+            NodeType::Internal(internel) => internel.well_formed(),
+            NodeType::Leaf(leaf) => leaf.well_formed(),
             _ => unimplemented!(),
         }
     }

@@ -141,7 +141,7 @@ impl Betree {
                 //     }
                 // }
                 internal.merge_buffers(msgs);
-                while internal.is_msg_buffer_full(0) {
+                while internal.is_msg_buffer_full() {
                     let c = internal.find_child_with_most_msgs();
                     let (child_id, new_pivots) =
                         self.send_msgs_to_subtree(c, internal.collect_msg_to_child(c));
