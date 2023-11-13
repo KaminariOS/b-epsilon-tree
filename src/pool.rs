@@ -17,8 +17,8 @@ pub struct NodeCache {
 
 impl NodeCache {
     pub fn acquire(&mut self, page_id: &PageId) -> Node {
-        let node = self.get(page_id).clone();
-        self.cache.pop(page_id);
+        self.get(page_id);
+        let node = self.cache.pop(page_id).unwrap();
         self.taken.insert(*page_id);
         node
     }
