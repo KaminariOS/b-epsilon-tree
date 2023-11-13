@@ -1,6 +1,6 @@
 use crate::types::{MessageData, MessageType, Serializable};
 use core::mem::size_of;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 
 use crate::error::Error;
@@ -157,19 +157,21 @@ impl InternalNode {
         // debug_assert!(self.msg_buffer.size() <= self.get_msg_buffer_capacity());
     }
 
-    pub fn find_child_with_most_msgs(&self) -> ChildId {
+    pub fn find_child_with_most_msgs(&self) -> (ChildId, Vec<OnDiskKey>) {
         debug_assert!(
             !self.msg_buffer.is_empty(),
             "Msg buffer size: {}",
             self.msg_buffer.size()
         );
-        let mut record: BTreeMap<ChildId, PageOffset> = BTreeMap::new();
+        let mut record: _ = HashMap::<ChildId, PageOffset>::new();
+        let mut record_keys = HashMap::<ChildId, Vec<&OnDiskKey>>::new(); 
         self.msg_buffer.iter().for_each(|(k, v)| {
             let child_id = self.find_child_with_key(k);
             *record.entry(child_id).or_default() += k.size() + v.size();
+            record_keys.entry(child_id).or_default().push(k);
         });
         let (child, _size) = record.into_iter().max_by_key(|(_, size)| *size).unwrap();
-        child
+        (child, record_keys.remove(&child).unwrap().into_iter().map(|k| k.clone()).collect())
     }
 
     pub fn get(&self, key: &OnDiskKey) -> Result<&[u8], ChildId> {
@@ -185,13 +187,13 @@ impl InternalNode {
         c.value().map(|&i| i).unwrap_or(self.rightmost_child)
     }
 
-    pub fn collect_msg_to_child(&mut self, c: ChildId) -> MsgBuffer {
-        let keys: Vec<_> = self
-            .msg_buffer
-            .iter()
-            .filter(|(k, _v)| self.find_child_with_key(k) == c)
-            .map(|(k, _v)| k.clone())
-            .collect();
+    pub fn collect_msgs(&mut self, keys: Vec<OnDiskKey>) -> MsgBuffer {
+        // let keys: Vec<_> = self
+        //     .msg_buffer
+        //     .iter()
+        //     .filter(|(k, _v)| self.find_child_with_key(k) == c)
+        //     .map(|(k, _v)| k.clone())
+        //     .collect();
         let mut msgs = MsgBuffer::new();
         keys.into_iter().for_each(|k| {
             let v = self.msg_buffer.remove(&k).unwrap();

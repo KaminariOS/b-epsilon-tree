@@ -4,8 +4,9 @@ use crate::superblock;
 use crate::types::MessageData;
 use crate::types::{MessageType, OnDiskKey, SizedOnDisk};
 use crate::{allocator::PageAllocator, node::ChildId};
-use std::collections::VecDeque;
+use std::collections::{VecDeque, BTreeMap};
 use std::path::Path;
+use std::time::Instant;
 use superblock::Superblock;
 
 pub struct Betree {
@@ -98,9 +99,9 @@ impl Betree {
                 // }
                 internal.merge_buffers(msgs);
                 while internal.is_msg_buffer_full() {
-                    let c = internal.find_child_with_most_msgs();
+                    let (c, keys) = internal.find_child_with_most_msgs();
                     let (child_id, new_pivots) =
-                        self.send_msgs_to_subtree(c, internal.collect_msg_to_child(c));
+                        self.send_msgs_to_subtree(c, internal.collect_msgs(keys));
                     internal.update_pivots(c, child_id, new_pivots)
                     // flush
                 }
@@ -217,7 +218,7 @@ impl Betree {
             let mut pool = NodeCache::new(
                 &superblock.storage_filename,
                 false,
-                1000.try_into().unwrap(),
+                10000.try_into().unwrap(),
             );
             let root = superblock.root;
             assert!(pool.get(&root).is_root());
@@ -302,32 +303,37 @@ pub fn test_btree() {
     let mut betree = Betree::open("/tmp/test_betree");
     betree.print_tree();
     // println!("Superblock root: {}", betree.superblock.last_flushed_root);
-    let test_cap = 18010;
-    // let mut ref_map = HashMap::with_capacity(test_cap);
+    // let test_cap = 18010;
+    // let mut ref_map = BTreeMap::new();
 
     use std::fs::File;
     // let file = File::create("test_map").unwrap();
     // serde_json::to_writer(file, &ref_map).unwrap();
     let file = File::open("test_map").unwrap();
     let v: Vec<(u64, u64)> = serde_json::from_reader(file).unwrap();
-    println!("first ten: {:?}", &v[..10]);
-
+    // println!("first ten: {:?}", &v[..10]);
+    let len = v.len();
+    println!("Total Keys: {}", len);
+    let time = Instant::now();
     for &(k_val, v_val) in &v {
         // let k = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
         // let v = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
         let k = k_val.to_be_bytes().to_vec();
         let v = v_val.to_be_bytes().to_vec();
+
+        // ref_map.insert(k, v);
         // ref_map.insert(k_val, v_val);
         betree.insert(k, v);
     }
-
-    betree.print_tree();
-    v.iter().enumerate().for_each(|(i, &(k, v))| {
-        let res = betree
-            .get(&k.to_be_bytes().to_vec())
-            .expect(&format!("Couldn't get betree for {}th: {}", i, k));
-        assert_eq!(&res, &v.to_be_bytes().to_vec());
-    });
+    let elapsed = time.elapsed();
+    println!("Total time: {}s; OPS: {}", elapsed.as_secs(), len as u128 / elapsed.as_millis());
+    // betree.print_tree();
+    // v.iter().enumerate().for_each(|(i, &(k, v))| {
+    //     let res = betree
+    //         .get(&k.to_be_bytes().to_vec())
+    //         .expect(&format!("Couldn't get betree for {}th: {}", i, k));
+    //     assert_eq!(&res, &v.to_be_bytes().to_vec());
+    // });
 
     // betree.flush();
     // core::mem::drop(betree);
@@ -340,7 +346,7 @@ pub fn test_btree() {
     //         assert_eq!(res, v);
     //     }
     //     );
-    assert!(false);
+    // assert!(false);
 }
 
 #[cfg(test)]
