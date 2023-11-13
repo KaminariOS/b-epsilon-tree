@@ -60,9 +60,10 @@ impl NodeCache {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_mut<'a>(&'a mut self, page_id: &PageId) -> &'a mut Node {
         debug_assert!(!self.taken.contains(page_id));
-        let mut r = if self.cache.contains(&page_id) {
+        let r = if self.cache.contains(&page_id) {
             return self.cache.get_mut(&page_id).unwrap();
         } else {
             let mut page = Page::default();

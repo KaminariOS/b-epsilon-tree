@@ -44,26 +44,26 @@ impl Superblock {
     }
 
     fn serialize(&mut self) {
-        let mut cursor = 0;
+        let mut _cursor = 0;
         let destination: &mut [u8] = (&mut self.page).into();
-        serialize!(MAGIC, destination, cursor);
-        serialize!(self.root, destination, cursor);
-        serialize!(self.last_checkpoint, destination, cursor);
-        serialize!(self.storage_filename, destination, cursor);
-        serialize!(self.allocator, destination, cursor);
+        serialize!(MAGIC, destination, _cursor);
+        serialize!(self.root, destination, _cursor);
+        serialize!(self.last_checkpoint, destination, _cursor);
+        serialize!(self.storage_filename, destination, _cursor);
+        serialize!(self.allocator, destination, _cursor);
     }
 
     fn deserialize(page: Page, fd: File) -> Self {
         let src: &[u8] = (&page).into();
-        let mut cursor = 0;
-        deserialize_with_var!(magic, u64, src, cursor);
+        let mut _cursor = 0;
+        deserialize_with_var!(magic, u64, src, _cursor);
         assert_eq!(magic, MAGIC);
-        deserialize_with_var!(root, PageId, src, cursor);
-        deserialize_with_var!(last_checkpoint, u64, src, cursor);
-        deserialize_with_var!(storage_filename, String, src, cursor);
-        deserialize_with_var!(allocator, SimpleAllocator, src, cursor);
+        deserialize_with_var!(root, PageId, src, _cursor);
+        deserialize_with_var!(last_checkpoint, u64, src, _cursor);
+        deserialize_with_var!(storage_filename, String, src, _cursor);
+        deserialize_with_var!(allocator, SimpleAllocator, src, _cursor);
         println!("root: {}, Deseri: {:?}", root, allocator);
-        deserialize_with_var!(wal, Wal, src, cursor);
+        deserialize_with_var!(wal, Wal, src, _cursor);
         Self {
             root,
             last_checkpoint,

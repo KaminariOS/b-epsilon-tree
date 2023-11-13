@@ -3,12 +3,10 @@ use crate::pool::NodeCache;
 use crate::superblock;
 use crate::types::MessageData;
 use crate::types::{MessageType, OnDiskKey, SizedOnDisk};
-use crate::{allocator::PageAllocator, node::ChildId, PAGESIZE};
+use crate::{allocator::PageAllocator, node::ChildId};
 use std::collections::VecDeque;
 use std::path::Path;
 use superblock::Superblock;
-
-const BTREE_SPLIT_THRESHOLD: u64 = PAGESIZE / 2;
 
 pub struct Betree {
     root: ChildId,
@@ -34,7 +32,7 @@ impl Betree {
 
         let mut buf = MsgBuffer::new();
         buf.insert(key, msg_data);
-        let (mut child_id, mut p) = self.send_msgs_to_subtree(self.root, buf);
+        let (child_id, p) = self.send_msgs_to_subtree(self.root, buf);
         debug_assert!(p.is_empty());
         // while !res.1.is_empty() {
         // let node = self.pool.get_mut(self.root);
@@ -42,48 +40,6 @@ impl Betree {
         // }
         self.root = child_id;
         self.superblock.root = child_id;
-
-        // let mut stack = vec![];
-        // let mut current = self.root;
-        // loop {
-        //     let mut safe = self.superblock.safe_to_overwrite_in_place(current);
-        //     if !safe {
-        //         current = self.copy_node(&current);
-        //         safe = true;
-        //     };
-        //     // All following code is safe
-        //     let node = self.pool.get_mut(&current);
-        //     if node.need_pre_split(&key, &msg_data) {
-        //         let [right_sib_id, parent_id] = [self.superblock.alloc(), self.superblock.alloc()];
-        //         let [right_sib, parent] = node.split(current, parent_id);
-        //         self.pool.put(right_sib_id, right_sib);
-        //         self.pool.put(parent_id, parent);
-        //         current = parent_id;
-        //     }
-        //
-        //     let node = self.pool.get_mut(&current);
-        //     match &mut node.node_inner {
-        //         NodeType::Leaf(leaf) => {
-        //             leaf.insert(key, msg_data);
-        //             if leaf.is_node_full() {
-        //                 // split
-        //                 let [right_sib_id, parent_id] = [self.superblock.alloc(), self.superblock.alloc()];
-        //                 let [right_sib, parent] = node.split(current, parent_id);
-        //                 self.pool.put(right_sib_id, right_sib);
-        //                 self.pool.put(parent_id, parent);
-        //                 current = parent_id;
-        //             }
-        //         }
-        //         NodeType::Internel(internel) => {
-        //             internel.insert_msg(key, msg_data);
-        //             if internel.is_msg_buffer_full(key.size() + msg_data.size()) {
-        //                 // flush msgs to sub tree, may split or merge
-        //                 // flush msgs
-        //             }
-        //         }
-        //         _ => unimplemented!()
-        //         }
-        //     }
     }
 
     /// Return new pivot, left, right child id if split
@@ -94,10 +50,10 @@ impl Betree {
         mut current: ChildId,
         msgs: MsgBuffer,
     ) -> (ChildId, Vec<(OnDiskKey, ChildId)>) {
-        let mut safe = self.superblock.safe_to_overwrite_in_place(current);
+        let safe = self.superblock.safe_to_overwrite_in_place(current);
         if !safe {
             current = self.copy_node(&current);
-            safe = true;
+            // safe = true;
         };
         let mut node = self.pool.acquire(&current);
         let old_current = current;
@@ -312,7 +268,7 @@ impl Betree {
                         internel
                             .pivot_map
                             .iter()
-                            .for_each(|(k, c)| new_queue.push_back(*c));
+                            .for_each(|(_, c)| new_queue.push_back(*c));
                         new_queue.push_back(internel.rightmost_child);
                     }
                     NodeType::Leaf(leaf) => {
@@ -338,8 +294,8 @@ impl Betree {
     }
 }
 
-#[cfg(test)]
-fn test_btree() {
+// #[cfg(test)]
+pub fn test_btree() {
     // use rand::prelude::*;
     // use rand_chacha::ChaCha8Rng;
     // let mut rng = StdRng::seed_from_u64(69420);
@@ -388,6 +344,7 @@ fn test_btree() {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn generate_test_file() {
     use std::collections::HashMap;
     use std::fs::File;
@@ -400,7 +357,7 @@ fn generate_test_file() {
     let mut rng = StdRng::seed_from_u64(69420);
     let mut ref_map = HashMap::with_capacity(test_cap);
 
-    for i in 0..test_cap {
+    for _i in 0..test_cap {
         // let k = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
         // let v = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
         let k_val = rng.gen::<u64>();

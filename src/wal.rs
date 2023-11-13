@@ -20,13 +20,11 @@ pub struct Wal {
 
 impl Serializable for Wal {
     fn serialize(&self, destination: &mut [u8]) {
-        let mut cursor = 0;
-        serialize!(self.next_log_offset, destination, cursor);
+        serialize!(self.next_log_offset, destination);
     }
 
     fn deserialize(src: &[u8]) -> Self {
-        let mut cursor = 0;
-        deserialize_with_var!(next_log_offset, u64, src, cursor);
+        deserialize_with_var!(next_log_offset, u64, src);
         Self {
             next_log_offset,
             unflushed_logs: vec![],

@@ -15,10 +15,11 @@ pub type PivotMap = BTreeMap<OnDiskKey, ChildId>;
 pub type PivotMapOnDisk = BTreeMapOnDisK<OnDiskKey, ChildId>;
 pub type KVOnDisk = BTreeMapOnDisK<OnDiskKey, OnDiskValue>;
 
-const MAX_MSG_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
+// const MAX_MSG_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 const MAX_KEY_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
-const MAX_VAL_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
+// const MAX_VAL_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 
+// type PivotsLength = u16;
 const MAGIC: u64 = 0x18728742b91b43b;
 
 #[derive(SizedOnDisk, Clone, Debug)]
@@ -39,10 +40,6 @@ impl LeafNode {
 
     fn get_meta_size(&self) -> PageOffset {
         true.size() + COM.size() + MAGIC.size()
-    }
-
-    fn get_kv_avail(&self) -> PageOffset {
-        self.get_kv_capacity() - self.map.size()
     }
 
     pub fn get_kv_capacity(&self) -> PageOffset {
@@ -110,8 +107,6 @@ impl Serializable for LeafNode {
     }
 }
 
-type PivotsLength = u16;
-
 #[derive(SizedOnDisk, Clone, Debug)]
 pub struct InternalNode {
     pub pivot_map: PivotMapOnDisk,
@@ -131,16 +126,6 @@ impl InternalNode {
 
     pub fn well_formed(&self) -> bool {
         !self.is_pivots_full() && !self.is_msg_buffer_full()
-    }
-
-    fn get_msg_buffer_avail(&self) -> PageOffset {
-        let cap = self.get_msg_buffer_capacity();
-        let current_size = self.msg_buffer.size();
-        if cap >= current_size {
-            cap - current_size
-        } else {
-            0
-        }
     }
 
     pub fn get_pivots_capacity(&self) -> PageOffset {
@@ -173,7 +158,11 @@ impl InternalNode {
     }
 
     pub fn find_child_with_most_msgs(&self) -> ChildId {
-        debug_assert!(!self.msg_buffer.is_empty(), "Msg buffer size: {}", self.msg_buffer.size());
+        debug_assert!(
+            !self.msg_buffer.is_empty(),
+            "Msg buffer size: {}",
+            self.msg_buffer.size()
+        );
         let mut record: BTreeMap<ChildId, PageOffset> = BTreeMap::new();
         self.msg_buffer.iter().for_each(|(k, v)| {
             let child_id = self.find_child_with_key(k);
@@ -236,17 +225,17 @@ impl InternalNode {
                 let k = self
                     .pivot_map
                     .iter()
-                    .find(|(k, v)| **v == old_child)
+                    .find(|(_, v)| **v == old_child)
                     .map(|(k, _)| k.clone())
                     .unwrap();
                 self.pivot_map.insert(k, child_id);
             }
         } else {
             let (mut pivot_map, rightmost_child) = convert_pivot(child_id, new_pivots);
-            let cursor = self.pivot_map.lower_bound(std::ops::Bound::Included(
+            let _cursor = self.pivot_map.lower_bound(std::ops::Bound::Included(
                 pivot_map.first_key_value().unwrap().0,
             ));
-            if let Some((k, v)) = cursor.key_value().map(|(k, v)| (k.clone(), *v)) {
+            if let Some((k, v)) = _cursor.key_value().map(|(k, v)| (k.clone(), *v)) {
                 debug_assert_eq!(v, old_child);
                 debug_assert!(pivot_map.last_key_value().unwrap().0 <= &k);
                 self.pivot_map.insert(k, rightmost_child);
@@ -303,19 +292,19 @@ impl InternalNode {
 impl Serializable for InternalNode {
     fn serialize(&self, destination: &mut [u8]) {
         debug_assert!(self.well_formed());
-        let mut cursor = 0;
-        serialize!(self.epsilon, destination, cursor);
-        serialize!(self.pivot_map, destination, cursor);
-        serialize!(self.rightmost_child, destination, cursor);
-        serialize!(self.msg_buffer, destination, cursor);
+        let mut _cursor = 0;
+        serialize!(self.epsilon, destination, _cursor);
+        serialize!(self.pivot_map, destination, _cursor);
+        serialize!(self.rightmost_child, destination, _cursor);
+        serialize!(self.msg_buffer, destination, _cursor);
     }
 
     fn deserialize(src: &[u8]) -> Self {
-        let mut cursor = 0;
-        let epsilon = deserialize!(f32, src, cursor);
-        let pivot_map = deserialize!(PivotMap, src, cursor);
-        let rightmost_child = deserialize!(ChildId, src, cursor);
-        let msg_buffer = deserialize!(MsgBuffer, src, cursor);
+        let mut _cursor = 0;
+        let epsilon = deserialize!(f32, src, _cursor);
+        let pivot_map = deserialize!(PivotMap, src, _cursor);
+        let rightmost_child = deserialize!(ChildId, src, _cursor);
+        let msg_buffer = deserialize!(MsgBuffer, src, _cursor);
         let new_node = Self {
             epsilon,
             pivot_map: pivot_map.into(),
@@ -347,27 +336,27 @@ impl SizedOnDisk for NodeType {
 
 impl Serializable for NodeType {
     fn serialize(&self, destination: &mut [u8]) {
-        let mut cursor = 0;
+        let mut _cursor = 0;
         let is_leaf = matches!(self, Self::Leaf(_));
-        serialize!(is_leaf, destination, cursor);
+        serialize!(is_leaf, destination, _cursor);
         match self {
             Self::Leaf(leaf) => {
-                serialize!(leaf, destination, cursor);
+                serialize!(leaf, destination, _cursor);
             }
             Self::Internal(i) => {
-                serialize!(i, destination, cursor);
+                serialize!(i, destination, _cursor);
             }
             _ => unimplemented!(),
         }
     }
 
     fn deserialize(src: &[u8]) -> Self {
-        let mut cursor = 0;
-        let is_leaf = deserialize!(bool, src, cursor);
+        let mut _cursor = 0;
+        let is_leaf = deserialize!(bool, src, _cursor);
         if is_leaf {
-            Self::Leaf(deserialize!(LeafNode, src, cursor))
+            Self::Leaf(deserialize!(LeafNode, src, _cursor))
         } else {
-            Self::Internal(deserialize!(InternalNode, src, cursor))
+            Self::Internal(deserialize!(InternalNode, src, _cursor))
         }
     }
 }
@@ -385,13 +374,11 @@ const COM: NodeCommon = NodeCommon {
 
 impl Serializable for NodeCommon {
     fn serialize(&self, destination: &mut [u8]) {
-        let mut cursor = 0;
-        serialize!(self.root, destination, cursor);
+        serialize!(self.root, destination);
     }
 
     fn deserialize(src: &[u8]) -> Self {
-        let mut cursor = 0;
-        let root = deserialize!(bool, src, cursor);
+        let root = deserialize!(bool, src);
         Self { dirty: false, root }
     }
 }
@@ -504,11 +491,11 @@ const NODE_META_OFFSET: usize = 0;
 impl TryFrom<&Page> for Node {
     type Error = Error;
     fn try_from(value: &Page) -> Result<Self, Self::Error> {
-        let mut cursor = NODE_META_OFFSET;
-        deserialize_with_var!(magic, u64, value, cursor);
+        let mut _cursor = NODE_META_OFFSET;
+        deserialize_with_var!(magic, u64, value, _cursor);
         assert_eq!(magic, MAGIC);
-        let common_data = deserialize!(NodeCommon, value, cursor);
-        let node_inner = deserialize!(NodeType, value, cursor);
+        let common_data = deserialize!(NodeCommon, value, _cursor);
+        let node_inner = deserialize!(NodeType, value, _cursor);
         Ok(Node {
             common_data,
             node_inner,
@@ -527,10 +514,10 @@ impl TryFrom<&Node> for Page {
     type Error = Error;
     fn try_from(value: &Node) -> Result<Self, Self::Error> {
         let mut page = Page::default();
-        let mut cursor = NODE_META_OFFSET;
-        serialize!(MAGIC, page, cursor);
-        serialize!(value.common_data, page, cursor);
-        serialize!(value.node_inner, page, cursor);
+        let mut _cursor = NODE_META_OFFSET;
+        serialize!(MAGIC, page, _cursor);
+        serialize!(value.common_data, page, _cursor);
+        serialize!(value.node_inner, page, _cursor);
         Ok(page)
     }
 }

@@ -1,4 +1,3 @@
-use core::mem;
 use core::ops::{Deref, DerefMut};
 pub const PAGESIZE: u64 = 4096;
 
@@ -44,6 +43,6 @@ impl<'a> From<&'a mut Page> for &'a mut [u8] {
 
 #[test]
 fn test_layout() {
-    assert_eq!(PAGESIZE as usize, mem::size_of::<PageRaw>());
-    assert_eq!(PAGESIZE as usize, mem::align_of::<PageRaw>());
+    assert_eq!(PAGESIZE as usize, core::mem::size_of::<PageRaw>());
+    assert_eq!(PAGESIZE as usize, core::mem::align_of::<PageRaw>());
 }
