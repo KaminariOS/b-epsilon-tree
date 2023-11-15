@@ -198,7 +198,7 @@ impl Betree {
 
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let mut superblock = Superblock::new(&path);
-        let mut pool = NodeCache::new(&superblock.storage_filename, true, 1000.try_into().unwrap());
+        let mut pool = NodeCache::new(&superblock.storage_filename, true, 10000.try_into().unwrap());
         let root = Node::new_empty_leaf(true);
         let page_id = superblock.allocator.alloc();
         pool.put(page_id, root);

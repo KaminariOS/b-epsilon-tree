@@ -1,8 +1,10 @@
 use std::collections::HashSet;
+use crate::types::SizedOnDisk;
 use std::{num::NonZeroUsize, path::Path};
 
 use lru::LruCache;
 
+use crate::page::PAGESIZE;
 use crate::{
     node::Node,
     page::Page,
@@ -83,6 +85,7 @@ impl NodeCache {
         debug_assert!(len <= cap);
         if len == cap {
             let (page_id, node) = self.cache.pop_lru().unwrap();
+            assert!(node.well_formed());
             if node.dirty() {
                 let page: Page = (&node).try_into().unwrap();
                 // TODO flush all dirty children
@@ -109,7 +112,8 @@ impl NodeCache {
 
     pub fn put(&mut self, page_id: PageId, mut node: Node) {
         debug_assert!(!self.taken.contains(&page_id));
-        assert!(!self.cache.contains(&page_id));
+        debug_assert!(node.well_formed());
+        debug_assert!(!self.cache.contains(&page_id));
         node.dirt();
         self.evict_one_if_full();
         self.cache.put(page_id, node);

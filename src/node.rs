@@ -149,7 +149,8 @@ impl InternalNode {
     }
 
     pub fn is_pivots_full(&self) -> bool {
-        self.get_pivots_avail() < MAX_KEY_SIZE + size_of::<ChildId>()
+        self.get_pivots_capacity() < self.pivot_map.size() +  self.rightmost_child.size()
+        // self.get_pivots_avail() < MAX_KEY_SIZE + size_of::<ChildId>()
     }
 
     pub fn insert_msg(&mut self, key: OnDiskKey, msg: MessageData) {
@@ -517,6 +518,8 @@ impl TryFrom<&Node> for Page {
     fn try_from(value: &Node) -> Result<Self, Self::Error> {
         let mut page = Page::default();
         let mut _cursor = NODE_META_OFFSET;
+        debug_assert!(value.well_formed());
+        // assert!(value.size() <= PAGESIZE as usize, "{:?}", value);
         serialize!(MAGIC, page, _cursor);
         serialize!(value.common_data, page, _cursor);
         serialize!(value.node_inner, page, _cursor);
