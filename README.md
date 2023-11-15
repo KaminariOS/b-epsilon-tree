@@ -2,7 +2,7 @@
 
 ## Background
 
-B<sup>ε</sup> is a write-optimization data structure described in [^fn].
+B<sup>ε</sup> tree is a write-optimization data structure described in [^fn].
 
 ## Design overview
 From bottom up:
