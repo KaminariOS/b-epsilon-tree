@@ -17,7 +17,6 @@ From bottom up:
   - Variable-size keys and values(byte array)
   - Leaf node, pivots, and message buffers are all represented as [std::collections::BTreemap](https://doc.rust-lang.org/std/collections/struct.BTreeMap.html) in memory and SSTables on disk.
   - Well-formedness: a leaf node is well-formed if its on-disk size is not larger than PAGESIZE; an internal node is well-formed if both pivots and message buffer have an on-disk size not larger than their capacities(determined by PAGESIZE and ε)
-    - At most one node in the tree can be !well-formed temporarily.
   - Core method:
       ```
       fn send_msgs_to_subtree(
