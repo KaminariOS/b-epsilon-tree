@@ -279,6 +279,7 @@ checksum = "836fa6a3e1e547f9a2c4040802ec865b5d85f4014efe00555d7090a3dcaa1090"
 [[package]]
 name = "ser_derive"
 version = "0.1.0"
+source = "git+https://github.com/KaminariOS/ser_derive.git#bd6e9ec6f6eb8ce292c7141f5b1904a1172c9a00"
 dependencies = [
  "proc-macro2",
  "quote",
