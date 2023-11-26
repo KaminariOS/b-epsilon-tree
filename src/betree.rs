@@ -98,13 +98,20 @@ impl Betree {
                 //     }
                 // }
                 internal.merge_buffers(msgs);
-                while internal.is_msg_buffer_full() {
-                    let (c, keys) = internal.find_child_with_most_msgs();
-                    let (child_id, new_pivots) =
-                        self.send_msgs_to_subtree(c, internal.collect_msgs(keys));
-                    internal.update_pivots(c, child_id, new_pivots)
-                    // flush
+                if internal.is_msg_buffer_full() {
+                    let msgs_map = internal.prepare_msg_flush();
+                    for (c, msgs) in msgs_map {
+                        let (child_id, new_pivots) = self.send_msgs_to_subtree(c, msgs);
+                        internal.update_pivots(c, child_id, new_pivots)
+                    } 
                 }
+                // while internal.is_msg_buffer_full() {
+                //     let (c, keys) = internal.find_child_with_most_msgs();
+                //     let (child_id, new_pivots) =
+                //         self.send_msgs_to_subtree(c, internal.collect_msgs(keys));
+                //     internal.update_pivots(c, child_id, new_pivots)
+                //     // flush
+                // }
                 // check merge
                 // flush msg buffer if ...
 
@@ -311,6 +318,7 @@ pub fn test_btree() {
     // serde_json::to_writer(file, &ref_map).unwrap();
     let file = File::open("test_map").unwrap();
     let v: Vec<(u64, u64)> = serde_json::from_reader(file).unwrap();
+    // let v = v[0..10000].to_vec();
     // println!("first ten: {:?}", &v[..10]);
     let len = v.len();
     println!("Total Keys: {}", len);
@@ -328,12 +336,12 @@ pub fn test_btree() {
     let elapsed = time.elapsed();
     println!("Total time: {}s; OPS: {}", elapsed.as_secs(), len as u128 / elapsed.as_millis());
     // betree.print_tree();
-    // v.iter().enumerate().for_each(|(i, &(k, v))| {
-    //     let res = betree
-    //         .get(&k.to_be_bytes().to_vec())
-    //         .expect(&format!("Couldn't get betree for {}th: {}", i, k));
-    //     assert_eq!(&res, &v.to_be_bytes().to_vec());
-    // });
+    v.iter().enumerate().for_each(|(i, &(k, v))| {
+        let res = betree
+            .get(&k.to_be_bytes().to_vec())
+            .expect(&format!("Couldn't get betree for {}th: {}", i, k));
+        assert_eq!(&res, &v.to_be_bytes().to_vec());
+    });
 
     // betree.flush();
     // core::mem::drop(betree);

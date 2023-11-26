@@ -1,5 +1,4 @@
 use crate::types::{MessageData, MessageType, Serializable};
-use core::mem::size_of;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 
@@ -81,6 +80,8 @@ impl LeafNode {
                 break;
             }
         }
+
+        let new_node_first = right_leaf.map.first_key_value().unwrap().0.clone();
         let new_node = Node {
             common_data: NodeCommon {
                 root: false,
@@ -90,7 +91,7 @@ impl LeafNode {
         };
         debug_assert!(new_node.well_formed());
         debug_assert!(self.well_formed());
-        (new_node, self.map.last_key_value().unwrap().0.clone())
+        (new_node, new_node_first)
         // (self.clone(), OnDiskKey::new(vec![]))
     }
 }
@@ -175,6 +176,24 @@ impl InternalNode {
         (child, record_keys.remove(&child).unwrap().into_iter().map(|k| k.clone()).collect())
     }
 
+    pub fn prepare_msg_flush(&mut self) -> HashMap<ChildId, MsgBuffer> {
+        let mut map: HashMap<ChildId, MsgBuffer> = HashMap::with_capacity(self.pivot_map.len());
+        let mut pre_child = self.rightmost_child;
+        for (key, child) in self.pivot_map.iter().rev() {
+            let new_buffer = self.msg_buffer.split_off(key);
+            if !new_buffer.is_empty() {
+                map.insert(pre_child, new_buffer);
+            }
+            pre_child = *child;
+        }
+        if !self.msg_buffer.is_empty() {
+            let mut leftmost_map = BTreeMapOnDisK::new();
+            std::mem::swap(&mut leftmost_map, &mut self.msg_buffer);
+            map.insert(pre_child, leftmost_map.to_inner());
+        }
+        map
+    }
+
     pub fn get(&self, key: &OnDiskKey) -> Result<&[u8], ChildId> {
         if let Some(slice) = self.msg_buffer.get(key).map(|m| m.val.as_slice()) {
             Ok(slice)
@@ -184,7 +203,7 @@ impl InternalNode {
     }
 
     fn find_child_with_key(&self, k: &OnDiskKey) -> ChildId {
-        let c = self.pivot_map.lower_bound(std::ops::Bound::Included(&k));
+        let c = self.pivot_map.lower_bound(std::ops::Bound::Excluded(&k));
         c.value().map(|&i| i).unwrap_or(self.rightmost_child)
     }
 
@@ -235,10 +254,10 @@ impl InternalNode {
             }
         } else {
             let (mut pivot_map, rightmost_child) = convert_pivot(child_id, new_pivots);
-            let _cursor = self.pivot_map.lower_bound(std::ops::Bound::Included(
+            let cursor = self.pivot_map.lower_bound(std::ops::Bound::Excluded(
                 pivot_map.first_key_value().unwrap().0,
             ));
-            if let Some((k, v)) = _cursor.key_value().map(|(k, v)| (k.clone(), *v)) {
+            if let Some((k, v)) = cursor.key_value().map(|(k, v)| (k.clone(), *v)) {
                 debug_assert_eq!(v, old_child);
                 debug_assert!(pivot_map.last_key_value().unwrap().0 <= &k);
                 self.pivot_map.insert(k, rightmost_child);
@@ -259,7 +278,7 @@ impl InternalNode {
         let (median_key, rightmost_child) = self.pivot_map.pop_last().unwrap().clone();
         let mut msgs = self.msg_buffer.split_off(&median_key);
         let msg = msgs.remove_entry(&median_key);
-        msg.map(|(k, m)| self.msg_buffer.insert(k, m));
+        msg.map(|(k, m)| msgs.insert(k, m));
         let original_rightmost = self.rightmost_child;
         self.rightmost_child = rightmost_child;
         let new_node = Node {
