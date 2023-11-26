@@ -517,6 +517,10 @@ impl<K: Serializable, V: Serializable> BTreeMapOnDisK<K, V> {
         let Self { inner, .. } = self;
         inner
     }
+
+    pub fn refresh_size(&mut self) {
+        self.size = self.inner.size();
+    }
 }
 
 impl<K: Serializable + Ord, V: Serializable> BTreeMapOnDisK<K, V> {
@@ -548,6 +552,9 @@ impl<K: Serializable + Ord, V: Serializable> BTreeMapOnDisK<K, V> {
     }
 
     pub fn append(&mut self, other: &mut BTreeMap<K, V>) {
+        if self.inner.len() < other.len() {
+            core::mem::swap(&mut self.inner, other);
+        }
         self.inner.append(other);
         self.size = self.inner.size();
     }

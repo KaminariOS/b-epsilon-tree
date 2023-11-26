@@ -5,3 +5,4 @@ perf.data*
 flamegraph.svg
 *.txt
 final_report.md
+*.pdf

@@ -210,7 +210,7 @@ impl InternalNode {
         }
     }
 
-    fn find_child_with_key(&self, k: &OnDiskKey) -> ChildId {
+    pub fn find_child_with_key(&self, k: &OnDiskKey) -> ChildId {
         let c = self.pivot_map.lower_bound(std::ops::Bound::Excluded(&k));
         c.value().map(|&i| i).unwrap_or(self.rightmost_child)
     }
@@ -283,7 +283,7 @@ impl InternalNode {
         let median = len / 2;
         let key_next = self.pivot_map.keys().nth(median + 1).unwrap().clone();
         let new_pivots = self.pivot_map.split_off(&key_next);
-        let (median_key, rightmost_child) = self.pivot_map.pop_last().unwrap().clone();
+        let (median_key, rightmost_child) = self.pivot_map.pop_last().unwrap();
         let mut msgs = self.msg_buffer.split_off(&median_key);
         let msg = msgs.remove_entry(&median_key);
         msg.map(|(k, m)| msgs.insert(k, m));

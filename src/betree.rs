@@ -49,8 +49,11 @@ impl Betree {
     fn send_msgs_to_subtree(
         &mut self,
         mut current: ChildId,
-        msgs: MsgBuffer,
+        mut msgs: MsgBuffer,
     ) -> (ChildId, Vec<(OnDiskKey, ChildId)>) {
+        if msgs.is_empty() {
+            return (current, vec![]);
+        }
         let safe = self.superblock.safe_to_overwrite_in_place(current);
         if !safe {
             current = self.copy_node(&current);
@@ -97,12 +100,29 @@ impl Betree {
                 //         return (current, Some((median, right_sib_id)))
                 //     }
                 // }
-                internal.merge_buffers(msgs);
-                if internal.is_msg_buffer_full() {
-                    let msgs_map = internal.prepare_msg_flush();
-                    for (c, msgs) in msgs_map {
-                        let (child_id, new_pivots) = self.send_msgs_to_subtree(c, msgs);
-                        internal.update_pivots(c, child_id, new_pivots)
+                let first_key = msgs.first_key_value().unwrap().0;
+                let last_key = msgs.last_key_value().unwrap().0;
+                let first_child = internal.find_child_with_key(first_key);
+                let last_child = internal.find_child_with_key(last_key);
+                if first_child == last_child && self.pool.get(&first_child).dirty() {
+                    // internal.msg_buffer
+                    //     .extract_if(|k, _v| internal.find_child_with_key(k) == last_child).for_each(
+                    //     |(k, v)| {msgs.insert(k, v);}
+                    //     );
+                    // internal.msg_buffer.refresh_size();
+                    msgs.keys().for_each(|k| {
+                        internal.msg_buffer.remove(k);
+                    });
+                    let (child_id, new_pivots) = self.send_msgs_to_subtree(first_child, msgs);
+                    internal.update_pivots(first_child, child_id, new_pivots)
+                } else {
+                    internal.merge_buffers(msgs);
+                    if internal.is_msg_buffer_full() {
+                        let msgs_map = internal.prepare_msg_flush();
+                        for (c, msgs) in msgs_map {
+                            let (child_id, new_pivots) = self.send_msgs_to_subtree(c, msgs);
+                            internal.update_pivots(c, child_id, new_pivots)
+                        }
                     }
                 }
                 // while internal.is_msg_buffer_full() {
@@ -205,11 +225,7 @@ impl Betree {
 
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let mut superblock = Superblock::new(&path);
-        let mut pool = NodeCache::new(
-            &superblock.storage_filename,
-            true,
-            10000.try_into().unwrap(),
-        );
+        let mut pool = NodeCache::new(&superblock.storage_filename, true, 10.try_into().unwrap());
         let root = Node::new_empty_leaf(true);
         let page_id = superblock.allocator.alloc();
         pool.put(page_id, root);
@@ -226,11 +242,8 @@ impl Betree {
     pub fn open<P: AsRef<Path>>(path: P) -> Self {
         if Superblock::exists(&path) {
             let superblock = Superblock::open(path);
-            let mut pool = NodeCache::new(
-                &superblock.storage_filename,
-                false,
-                10000.try_into().unwrap(),
-            );
+            let mut pool =
+                NodeCache::new(&superblock.storage_filename, false, 40.try_into().unwrap());
             let root = superblock.root;
             assert!(pool.get(&root).is_root());
             Self {
@@ -339,8 +352,8 @@ pub fn test_btree() {
     }
     let elapsed = time.elapsed();
     println!(
-        "Total time: {}s; OPS: {}",
-        elapsed.as_secs(),
+        "Total time: {:.3}s; OPS: {}",
+        elapsed.as_secs_f32(),
         len as u128 / elapsed.as_millis()
     );
     // betree.print_tree();
