@@ -32,8 +32,8 @@ From bottom up:
   Pseudo code:
     1. if the current node is `InternalNode`,
        
-      1. merge `msgs` with its own message buffer.
-      2. While the current message buffer is not well-formed, find the child that is the recipient of most messages and flush messages to that child by calling `send_msgs_to_subtree` and merge the returned new pivots to the current pivot map.
+      1. if all incoming messages go to the same child, sanitize current buffer and then flush directly with no merging; else: merge `msgs` with its own message buffer.
+      2. While the current message buffer is not well-formed, flush all messages in buffer and merge the returned new pivots to the current pivot map.
       3. While the current pivots map is not well-formed, keep splitting.
       4. Return new pivots
     2. if the current node is `LeafNode`, apply all messages to the current tree. Keep splitting until the current node is well-formed. Return new pivots.
