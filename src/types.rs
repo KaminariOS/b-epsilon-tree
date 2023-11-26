@@ -512,9 +512,9 @@ impl<K: Serializable, V: Serializable> BTreeMapOnDisK<K, V> {
             inner,
         }
     }
-    
+
     pub fn to_inner(self) -> BTreeMap<K, V> {
-        let Self {inner, ..} = self;
+        let Self { inner, .. } = self;
         inner
     }
 }

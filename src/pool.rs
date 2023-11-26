@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use crate::types::SizedOnDisk;
+use std::collections::HashSet;
 use std::{num::NonZeroUsize, path::Path};
 
 use lru::LruCache;

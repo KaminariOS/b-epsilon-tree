@@ -150,7 +150,7 @@ impl InternalNode {
     }
 
     pub fn is_pivots_full(&self) -> bool {
-        self.get_pivots_capacity() < self.pivot_map.size() +  self.rightmost_child.size()
+        self.get_pivots_capacity() < self.pivot_map.size() + self.rightmost_child.size()
         // self.get_pivots_avail() < MAX_KEY_SIZE + size_of::<ChildId>()
     }
 
@@ -166,14 +166,22 @@ impl InternalNode {
             self.msg_buffer.size()
         );
         let mut record: _ = HashMap::<ChildId, PageOffset>::new();
-        let mut record_keys = HashMap::<ChildId, Vec<&OnDiskKey>>::new(); 
+        let mut record_keys = HashMap::<ChildId, Vec<&OnDiskKey>>::new();
         self.msg_buffer.iter().for_each(|(k, v)| {
             let child_id = self.find_child_with_key(k);
             *record.entry(child_id).or_default() += k.size() + v.size();
             record_keys.entry(child_id).or_default().push(k);
         });
         let (child, _size) = record.into_iter().max_by_key(|(_, size)| *size).unwrap();
-        (child, record_keys.remove(&child).unwrap().into_iter().map(|k| k.clone()).collect())
+        (
+            child,
+            record_keys
+                .remove(&child)
+                .unwrap()
+                .into_iter()
+                .map(|k| k.clone())
+                .collect(),
+        )
     }
 
     pub fn prepare_msg_flush(&mut self) -> HashMap<ChildId, MsgBuffer> {

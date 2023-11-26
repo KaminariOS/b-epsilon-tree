@@ -4,7 +4,7 @@ use crate::superblock;
 use crate::types::MessageData;
 use crate::types::{MessageType, OnDiskKey, SizedOnDisk};
 use crate::{allocator::PageAllocator, node::ChildId};
-use std::collections::{VecDeque, BTreeMap};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::time::Instant;
 use superblock::Superblock;
@@ -103,7 +103,7 @@ impl Betree {
                     for (c, msgs) in msgs_map {
                         let (child_id, new_pivots) = self.send_msgs_to_subtree(c, msgs);
                         internal.update_pivots(c, child_id, new_pivots)
-                    } 
+                    }
                 }
                 // while internal.is_msg_buffer_full() {
                 //     let (c, keys) = internal.find_child_with_most_msgs();
@@ -205,7 +205,11 @@ impl Betree {
 
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let mut superblock = Superblock::new(&path);
-        let mut pool = NodeCache::new(&superblock.storage_filename, true, 10000.try_into().unwrap());
+        let mut pool = NodeCache::new(
+            &superblock.storage_filename,
+            true,
+            10000.try_into().unwrap(),
+        );
         let root = Node::new_empty_leaf(true);
         let page_id = superblock.allocator.alloc();
         pool.put(page_id, root);
@@ -334,7 +338,11 @@ pub fn test_btree() {
         betree.insert(k, v);
     }
     let elapsed = time.elapsed();
-    println!("Total time: {}s; OPS: {}", elapsed.as_secs(), len as u128 / elapsed.as_millis());
+    println!(
+        "Total time: {}s; OPS: {}",
+        elapsed.as_secs(),
+        len as u128 / elapsed.as_millis()
+    );
     // betree.print_tree();
     v.iter().enumerate().for_each(|(i, &(k, v))| {
         let res = betree
@@ -379,11 +387,16 @@ fn generate_test_file() {
         ref_map.insert(k_val, v_val);
     }
     let v: Vec<(u64, u64)> = ref_map.into_iter().collect();
+
+    let mut file_for_cpp = File::create("test_inputs.txt").unwrap();
+    use std::io::Write;
+    v.iter()
+        .for_each(|(k, _v)| writeln!(file_for_cpp, "Inserting {}", k).unwrap());
     serde_json::to_writer(file, &v).unwrap();
 }
 
 #[test]
 fn test_both() {
-    // generate_test_file();
-    test_btree();
+    generate_test_file();
+    // test_btree();
 }
