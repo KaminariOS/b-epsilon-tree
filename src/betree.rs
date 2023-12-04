@@ -1,10 +1,10 @@
-use crate::node::{MsgBuffer, Node, NodeType};
+use crate::node::{InternalNode, MsgBuffer, Node, NodeType};
 use crate::pool::NodeCache;
 use crate::superblock;
 use crate::types::MessageData;
 use crate::types::{MessageType, OnDiskKey, SizedOnDisk};
 use crate::{allocator::PageAllocator, node::ChildId};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 use std::time::Instant;
 use superblock::Superblock;
@@ -49,7 +49,7 @@ impl Betree {
     fn send_msgs_to_subtree(
         &mut self,
         mut current: ChildId,
-        mut msgs: MsgBuffer,
+        msgs: MsgBuffer,
     ) -> (ChildId, Vec<(OnDiskKey, ChildId)>) {
         if msgs.is_empty() {
             return (current, vec![]);
@@ -85,21 +85,7 @@ impl Betree {
                 // }
             }
             NodeType::Internal(internal) => {
-                // if node.need_pre_split(msgs.size()) {
-                //     let right_sib_id = self.superblock.alloc();
-                //     let (right_sib, median) = node.split();
-                //     self.pool.put(right_sib_id, right_sib);
-                //     if node.is_root() {
-                //         let parent = Node::new_internel_root(median, current, right_sib_id);
-                //         let parent_id = self.superblock.alloc();
-                //         node.unset_root();
-                //         self.pool.put(parent_id, parent);
-                //         current = parent_id;
-                //         return self.send_msgs_to_subtree(current, msgs);
-                //     } else {
-                //         return (current, Some((median, right_sib_id)))
-                //     }
-                // }
+                let mut merging_possible = HashSet::new();
                 let first_key = msgs.first_key_value().unwrap().0;
                 let last_key = msgs.last_key_value().unwrap().0;
                 let first_child = internal.find_child_with_key(first_key);
@@ -114,6 +100,9 @@ impl Betree {
                         internal.msg_buffer.remove(k);
                     });
                     let (child_id, new_pivots) = self.send_msgs_to_subtree(first_child, msgs);
+                    if new_pivots.is_empty() && self.merging_possible(&child_id) {
+                        merging_possible.insert(child_id);
+                    }
                     internal.update_pivots(first_child, child_id, new_pivots)
                 } else {
                     internal.merge_buffers(msgs);
@@ -121,19 +110,15 @@ impl Betree {
                         let msgs_map = internal.prepare_msg_flush();
                         for (c, msgs) in msgs_map {
                             let (child_id, new_pivots) = self.send_msgs_to_subtree(c, msgs);
+                            if new_pivots.is_empty() && self.merging_possible(&child_id) {
+                                merging_possible.insert(child_id);
+                            }
                             internal.update_pivots(c, child_id, new_pivots)
                         }
                     }
                 }
-                // while internal.is_msg_buffer_full() {
-                //     let (c, keys) = internal.find_child_with_most_msgs();
-                //     let (child_id, new_pivots) =
-                //         self.send_msgs_to_subtree(c, internal.collect_msgs(keys));
-                //     internal.update_pivots(c, child_id, new_pivots)
-                //     // flush
-                // }
-                // check merge
-                // flush msg buffer if ...
+
+                self.merge(merging_possible, internal);
 
                 let mut pivots = vec![];
                 while internal.is_pivots_full() {
@@ -162,17 +147,27 @@ impl Betree {
         res
     }
 
+    pub fn merging_possible(&mut self, child_id: &ChildId) -> bool {
+        let node = self.pool.get(child_id);
+        node.merging_possible()
+    }
+
+    pub fn merge(&mut self, merging_possible: HashSet<ChildId>, node: &mut InternalNode) {}
+
     pub fn delete(&mut self, key: Vec<u8>) {
         let key = OnDiskKey::new(key);
         let msg_data = MessageData::new(MessageType::Delete, vec![]);
-        // logging here
-
+        let mut buf = MsgBuffer::new();
+        buf.insert(key, msg_data);
         // Merging
     }
 
     pub fn upsert(&mut self, key: Vec<u8>, val: Vec<u8>) {
         let key = OnDiskKey::new(key);
         let msg_data = MessageData::new(MessageType::Upsert, val);
+
+        let mut buf = MsgBuffer::new();
+        buf.insert(key, msg_data);
 
         // logging
     }
@@ -243,7 +238,7 @@ impl Betree {
         if Superblock::exists(&path) {
             let superblock = Superblock::open(path);
             let mut pool =
-                NodeCache::new(&superblock.storage_filename, false, 40.try_into().unwrap());
+                NodeCache::new(&superblock.storage_filename, false, 10.try_into().unwrap());
             let root = superblock.root;
             assert!(pool.get(&root).is_root());
             Self {
@@ -340,12 +335,16 @@ pub fn test_btree() {
     let len = v.len();
     println!("Total Keys: {}", len);
     let time = Instant::now();
-    for &(k_val, v_val) in &v {
+    let interval = 100000;
+    for (i, &(k_val, v_val)) in v.iter().enumerate() {
         // let k = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
         // let v = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
         let k = k_val.to_be_bytes().to_vec();
         let v = v_val.to_be_bytes().to_vec();
 
+        if i % interval == 0 {
+            println!("{i} th key");
+        }
         // ref_map.insert(k, v);
         // ref_map.insert(k_val, v_val);
         betree.insert(k, v);

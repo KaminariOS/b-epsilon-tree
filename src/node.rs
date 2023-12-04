@@ -1,4 +1,5 @@
 use crate::types::{MessageData, MessageType, Serializable};
+use core::panic;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 
@@ -71,6 +72,10 @@ impl LeafNode {
         !self.is_node_full()
     }
 
+    fn merge(&mut self, other: Self) {
+        self.map.append(&mut other.map.to_inner());
+    }
+
     pub fn split(&mut self) -> (Node, OnDiskKey) {
         let mut right_leaf = Self::new();
         while !right_leaf.is_node_full() && self.map.size() > self.get_kv_capacity() / 2 {
@@ -134,7 +139,11 @@ impl InternalNode {
     }
 
     pub fn get_pivots_avail(&self) -> PageOffset {
-        self.get_pivots_capacity() - self.pivot_map.size() - self.rightmost_child.size()
+        self.get_pivots_capacity() - self.get_pivots_size()
+    }
+
+    pub fn get_pivots_size(&self) -> PageOffset {
+        self.pivot_map.size() - self.rightmost_child.size()
     }
 
     fn get_meta_size(&self) -> PageOffset {
@@ -249,6 +258,9 @@ impl InternalNode {
         new_pivots: Vec<(OnDiskKey, ChildId)>,
     ) {
         if new_pivots.is_empty() {
+            if old_child == child_id {
+                return;
+            }
             if self.rightmost_child == old_child {
                 self.rightmost_child = child_id;
             } else {
@@ -302,6 +314,19 @@ impl InternalNode {
         debug_assert!(new_node.well_formed());
         (new_node, median_key)
         // (self.clone(), OnDiskKey::new(vec![]))
+    }
+
+    fn merge(&mut self, other: Self) {
+        let Self {
+            pivot_map,
+            rightmost_child,
+            msg_buffer,
+            ..
+        } = other;
+        self.msg_buffer.append(&mut msg_buffer.to_inner());
+        // assert pivots non-overlapping
+        self.pivot_map.append(&mut pivot_map.to_inner());
+        self.rightmost_child = self.rightmost_child.max(rightmost_child);
     }
 
     fn new(
@@ -484,6 +509,35 @@ impl Node {
             _ => {
                 unimplemented!()
             }
+        }
+    }
+
+    pub fn merging_possible(&self) -> bool {
+        const SPLIT_THRESHOLD: usize = 4;
+        match &self.node_inner {
+            NodeType::Internal(internal) => {
+                internal.get_pivots_size() <= internal.get_pivots_capacity() / SPLIT_THRESHOLD
+                    && internal.msg_buffer.size()
+                        <= internal.get_msg_buffer_capacity() / SPLIT_THRESHOLD
+            }
+            NodeType::Leaf(leaf) => leaf.size() <= leaf.get_kv_capacity() / SPLIT_THRESHOLD,
+            _ => {
+                unimplemented!()
+            }
+        }
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        debug_assert!(self.dirty());
+        let Self { node_inner, .. } = other;
+        match (&mut self.node_inner, node_inner) {
+            (NodeType::Leaf(left), NodeType::Leaf(right)) => {
+                left.merge(right);
+            }
+            (NodeType::Internal(left), NodeType::Internal(right)) => {
+                left.merge(right);
+            }
+            _ => panic!("Merging different types of nodes"),
         }
     }
 
