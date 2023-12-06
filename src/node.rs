@@ -193,22 +193,25 @@ impl InternalNode {
         )
     }
 
-    pub fn prepare_msg_flush(&mut self) -> HashMap<ChildId, MsgBuffer> {
-        let mut map: HashMap<ChildId, MsgBuffer> = HashMap::with_capacity(self.pivot_map.len());
+    // Return msgs to flush, from right to left
+    pub fn prepare_msg_flush(&mut self) -> Vec<(ChildId, MsgBuffer)> {
+        let mut buffers = Vec::with_capacity(self.pivot_map.len());
         let mut pre_child = self.rightmost_child;
         for (key, child) in self.pivot_map.iter().rev() {
             let new_buffer = self.msg_buffer.split_off(key);
             if !new_buffer.is_empty() {
-                map.insert(pre_child, new_buffer);
+                // map.insert(pre_child, new_buffer);
+                buffers.push((pre_child, new_buffer));
             }
             pre_child = *child;
         }
         if !self.msg_buffer.is_empty() {
             let mut leftmost_map = BTreeMapOnDisK::new();
             std::mem::swap(&mut leftmost_map, &mut self.msg_buffer);
-            map.insert(pre_child, leftmost_map.to_inner());
+            // map.insert(pre_child, leftmost_map.to_inner());
+            buffers.push((pre_child, leftmost_map.to_inner()));
         }
-        map
+        buffers
     }
 
     pub fn get(&self, key: &OnDiskKey) -> Result<&[u8], ChildId> {
@@ -257,6 +260,7 @@ impl InternalNode {
         child_id: ChildId,
         new_pivots: Vec<(OnDiskKey, ChildId)>,
     ) {
+        assert!(new_pivots.len() <= 1);
         if new_pivots.is_empty() {
             if old_child == child_id {
                 return;

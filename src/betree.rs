@@ -152,7 +152,45 @@ impl Betree {
         node.merging_possible()
     }
 
-    pub fn merge(&mut self, merging_possible: HashSet<ChildId>, node: &mut InternalNode) {}
+    pub fn merge(&mut self, mut merging_possible: HashSet<ChildId>, node: &mut InternalNode) {
+        
+        let mut pre_child = node.rightmost_child;
+        let mut deleted_keys = vec![];
+        
+        for (k, &c) in 
+            node.pivot_map.iter().rev() {
+            if merging_possible.contains(&pre_child) 
+                && self.pool.get(&c).merging_possible()
+            {
+                let mut c = c;
+                let safe = self.superblock.safe_to_overwrite_in_place(c);
+                if !safe {
+                    c = self.copy_node(&c);
+                    // safe = true;
+                };
+                let pre_node = self.pool.acquire(&pre_child);
+                let current = self.pool.get_mut(&c);
+                current.merge(pre_node);
+                deleted_keys.push((k.clone(), c));
+                if current.merging_possible() {
+                    // merging_possible.insert(c);
+                }
+                merging_possible.remove(&c);
+                merging_possible.remove(&pre_child);
+            }
+            pre_child = c;
+        }
+        for (k, c) in deleted_keys {
+            let cursor = node.pivot_map.lower_bound(std::ops::Bound::Excluded(&k));
+            let next_key = cursor.key().map(|k| k.clone());
+            if let Some(next_key) = next_key {
+                node.pivot_map.insert(next_key, c);
+            } else {
+                unreachable!();
+            }
+            node.pivot_map.remove(&k);
+        }
+    }
 
     pub fn delete(&mut self, key: Vec<u8>) {
         let key = OnDiskKey::new(key);
@@ -177,7 +215,7 @@ impl Betree {
         self.get_from_subtree(&key, self.root)
     }
 
-    // Fuck borrow checker
+    // Stupid borrow checker
     // fn get_from_subtree(
     //     &mut self,
     //     key: &OnDiskKey,
