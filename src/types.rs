@@ -498,12 +498,12 @@ impl Serializable for Message {
 }
 
 #[derive(Deref, Clone, Debug)]
-pub struct BTreeMapOnDisK<K: Serializable, V: Serializable> {
+pub struct BTreeMapOnDisk<K: Serializable, V: Serializable> {
     #[deref]
     inner: BTreeMap<K, V>,
     size: PageOffset,
 }
-impl<K: Serializable, V: Serializable> BTreeMapOnDisK<K, V> {
+impl<K: Serializable, V: Serializable> BTreeMapOnDisk<K, V> {
     // type InnerMap = BTreeMap<K, V>;
     pub fn new() -> Self {
         let inner = BTreeMap::<K, V>::new();
@@ -523,7 +523,7 @@ impl<K: Serializable, V: Serializable> BTreeMapOnDisK<K, V> {
     }
 }
 
-impl<K: Serializable + Ord, V: Serializable> BTreeMapOnDisK<K, V> {
+impl<K: Serializable + Ord, V: Serializable> BTreeMapOnDisk<K, V> {
     // type InnerMap = BTreeMap<K, V>;
     pub fn pop_last(&mut self) -> Option<(K, V)> {
         let last = self.inner.pop_last();
@@ -582,13 +582,13 @@ impl<T: SizedOnDisk> SizedOnDisk for Option<T> {
     }
 }
 
-impl<K: Serializable, V: Serializable> SizedOnDisk for BTreeMapOnDisK<K, V> {
+impl<K: Serializable, V: Serializable> SizedOnDisk for BTreeMapOnDisk<K, V> {
     fn size(&self) -> PageOffset {
         self.size
     }
 }
 
-impl<K: Serializable + Ord, V: Serializable> Serializable for BTreeMapOnDisK<K, V> {
+impl<K: Serializable + Ord, V: Serializable> Serializable for BTreeMapOnDisk<K, V> {
     fn serialize(&self, destination: &mut [u8]) {
         serialize!(self.inner, destination);
     }
@@ -603,7 +603,7 @@ impl<K: Serializable + Ord, V: Serializable> Serializable for BTreeMapOnDisK<K, 
     }
 }
 
-impl<K: Serializable + Ord, V: Serializable> From<BTreeMap<K, V>> for BTreeMapOnDisK<K, V> {
+impl<K: Serializable + Ord, V: Serializable> From<BTreeMap<K, V>> for BTreeMapOnDisk<K, V> {
     fn from(inner: BTreeMap<K, V>) -> Self {
         let size = inner.size();
         Self { inner, size }

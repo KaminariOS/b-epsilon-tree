@@ -34,7 +34,7 @@ impl Betree {
         let mut buf = MsgBuffer::new();
         buf.insert(key, msg_data);
         let (child_id, p) = self.send_msgs_to_subtree(self.root, buf);
-        debug_assert!(p.is_empty());
+        debug_assert!(p.is_none());
         // while !res.1.is_empty() {
         // let node = self.pool.get_mut(self.root);
         // node.
@@ -50,9 +50,9 @@ impl Betree {
         &mut self,
         mut current: ChildId,
         msgs: MsgBuffer,
-    ) -> (ChildId, Vec<(OnDiskKey, ChildId)>) {
+    ) -> (ChildId, Option<(OnDiskKey, ChildId)>) {
         if msgs.is_empty() {
-            return (current, vec![]);
+            return (current, None);
         }
         let safe = self.superblock.safe_to_overwrite_in_place(current);
         if !safe {
@@ -65,14 +65,15 @@ impl Betree {
             NodeType::Leaf(leaf) => {
                 msgs.into_iter().for_each(|(key, msg)| leaf.apply(key, msg));
                 // While loop
-                let mut pivots = vec![];
-                while leaf.is_node_full() {
+                let mut pivots = None;
+                if leaf.is_node_full() {
                     let right_sib_id = self.superblock.alloc();
                     let (right_sib, median) = leaf.split();
                     self.pool.put(right_sib_id, right_sib);
-                    pivots.push((median, right_sib_id));
+                    pivots = Some((median, right_sib_id));
                 }
-                pivots.reverse();
+                assert!(!leaf.is_node_full());
+                // pivots.reverse();
                 pivots
                 // if node.is_root() && !pivots.is_empty() {
                 //     let parent = Node::new_internel_root(current, &pivots);
@@ -100,7 +101,7 @@ impl Betree {
                         internal.msg_buffer.remove(k);
                     });
                     let (child_id, new_pivots) = self.send_msgs_to_subtree(first_child, msgs);
-                    if new_pivots.is_empty() && self.merging_possible(&child_id) {
+                    if new_pivots.is_none() && self.merging_possible(&child_id) {
                         merging_possible.insert(child_id);
                     }
                     internal.update_pivots(first_child, child_id, new_pivots)
@@ -110,7 +111,7 @@ impl Betree {
                         let msgs_map = internal.prepare_msg_flush();
                         for (c, msgs) in msgs_map {
                             let (child_id, new_pivots) = self.send_msgs_to_subtree(c, msgs);
-                            if new_pivots.is_empty() && self.merging_possible(&child_id) {
+                            if new_pivots.is_none() && self.merging_possible(&child_id) {
                                 merging_possible.insert(child_id);
                             }
                             internal.update_pivots(c, child_id, new_pivots)
@@ -120,26 +121,27 @@ impl Betree {
 
                 self.merge(merging_possible, internal);
 
-                let mut pivots = vec![];
-                while internal.is_pivots_full() {
+                let mut pivots = None;
+                if internal.is_pivots_full() {
                     let right_sib_id = self.superblock.alloc();
                     let (right_sib, median) = internal.split();
                     self.pool.put(right_sib_id, right_sib);
-                    pivots.push((median, right_sib_id));
+                    pivots = Some((median, right_sib_id));
                 }
-                pivots.reverse();
+                // pivots.reverse();
+                assert!(!internal.is_pivots_full());
                 pivots
             }
             _ => unimplemented!(),
         };
 
-        let res = if node.is_root() && !pivots.is_empty() {
+        let res = if node.is_root() && !pivots.is_none() {
             // Do it in while loop
             let parent = Node::new_internel_root(current, pivots);
             let parent_id = self.superblock.alloc();
             node.unset_root();
             self.pool.put(parent_id, parent);
-            (parent_id, vec![])
+            (parent_id, None)
         } else {
             (current, pivots)
         };
@@ -153,15 +155,11 @@ impl Betree {
     }
 
     pub fn merge(&mut self, mut merging_possible: HashSet<ChildId>, node: &mut InternalNode) {
-        
         let mut pre_child = node.rightmost_child;
         let mut deleted_keys = vec![];
-        
-        for (k, &c) in 
-            node.pivot_map.iter().rev() {
-            if merging_possible.contains(&pre_child) 
-                && self.pool.get(&c).merging_possible()
-            {
+
+        for (k, &c) in node.pivot_map.iter().rev() {
+            if merging_possible.contains(&pre_child) && self.pool.get(&c).merging_possible() {
                 let mut c = c;
                 let safe = self.superblock.safe_to_overwrite_in_place(c);
                 if !safe {

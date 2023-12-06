@@ -6,14 +6,14 @@ use std::fmt::Debug;
 use crate::error::Error;
 use crate::page::{Page, PAGESIZE};
 use crate::pager::PageId;
-use crate::types::{BTreeMapOnDisK, OnDiskKey, OnDiskValue, PageOffset, SizedOnDisk};
+use crate::types::{BTreeMapOnDisk, OnDiskKey, OnDiskValue, PageOffset, SizedOnDisk};
 use ser_derive::SizedOnDisk;
 pub type ChildId = PageId;
 pub type MsgBuffer = BTreeMap<OnDiskKey, MessageData>;
-pub type MsgBufferOnDisk = BTreeMapOnDisK<OnDiskKey, MessageData>;
+pub type MsgBufferOnDisk = BTreeMapOnDisk<OnDiskKey, MessageData>;
 pub type PivotMap = BTreeMap<OnDiskKey, ChildId>;
-pub type PivotMapOnDisk = BTreeMapOnDisK<OnDiskKey, ChildId>;
-pub type KVOnDisk = BTreeMapOnDisK<OnDiskKey, OnDiskValue>;
+pub type PivotMapOnDisk = BTreeMapOnDisk<OnDiskKey, ChildId>;
+pub type KVOnDisk = BTreeMapOnDisk<OnDiskKey, OnDiskValue>;
 
 // const MAX_MSG_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 const MAX_KEY_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
@@ -206,7 +206,7 @@ impl InternalNode {
             pre_child = *child;
         }
         if !self.msg_buffer.is_empty() {
-            let mut leftmost_map = BTreeMapOnDisK::new();
+            let mut leftmost_map = MsgBufferOnDisk::new();
             std::mem::swap(&mut leftmost_map, &mut self.msg_buffer);
             // map.insert(pre_child, leftmost_map.to_inner());
             buffers.push((pre_child, leftmost_map.to_inner()));
@@ -242,10 +242,7 @@ impl InternalNode {
         msgs
     }
 
-    pub fn new_internel_root(
-        pivot_map: BTreeMap<OnDiskKey, ChildId>,
-        rightmost_child: ChildId,
-    ) -> Self {
+    pub fn new_internel_root(pivot_map: PivotMap, rightmost_child: ChildId) -> Self {
         Self {
             pivot_map: pivot_map.into(),
             rightmost_child,
@@ -258,10 +255,10 @@ impl InternalNode {
         &mut self,
         old_child: ChildId,
         child_id: ChildId,
-        new_pivots: Vec<(OnDiskKey, ChildId)>,
+        new_pivots: Option<(OnDiskKey, ChildId)>,
     ) {
-        assert!(new_pivots.len() <= 1);
-        if new_pivots.is_empty() {
+        // assert!(new_pivots.len() <= 1);
+        if new_pivots.is_none() {
             if old_child == child_id {
                 return;
             }
@@ -276,20 +273,19 @@ impl InternalNode {
                     .unwrap();
                 self.pivot_map.insert(k, child_id);
             }
-        } else {
-            let (mut pivot_map, rightmost_child) = convert_pivot(child_id, new_pivots);
-            let cursor = self.pivot_map.lower_bound(std::ops::Bound::Excluded(
-                pivot_map.first_key_value().unwrap().0,
-            ));
+        } else if let Some((key, right)) = new_pivots {
+            // let (mut pivot_map, rightmost_child) = convert_pivot(child_id, new_pivots);
+            let cursor = self.pivot_map.lower_bound(std::ops::Bound::Excluded(&key));
             if let Some((k, v)) = cursor.key_value().map(|(k, v)| (k.clone(), *v)) {
                 debug_assert_eq!(v, old_child);
-                debug_assert!(pivot_map.last_key_value().unwrap().0 <= &k);
-                self.pivot_map.insert(k, rightmost_child);
+                // debug_assert!(pivot_map.last_key_value().unwrap().0 <= &k);
+                self.pivot_map.insert(k, right);
             } else {
                 debug_assert_eq!(self.rightmost_child, old_child);
-                self.rightmost_child = rightmost_child;
+                self.rightmost_child = right;
             }
-            self.pivot_map.append(&mut pivot_map);
+            self.pivot_map.insert(key, child_id);
+            // self.pivot_map.append(&mut pivot_map);
         }
     }
 
@@ -449,8 +445,15 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new_internel_root(child_id: ChildId, pivots: Vec<(OnDiskKey, ChildId)>) -> Self {
-        let (pivot_map, rightmost_child) = convert_pivot(child_id, pivots);
+    pub fn new_internel_root(child_id: ChildId, pivots: Option<(OnDiskKey, ChildId)>) -> Self {
+        let mut pivot_map = PivotMap::new();
+        let rightmost_child = if let Some((key, right)) = pivots {
+            pivot_map.insert(key, child_id);
+            right
+        } else {
+            child_id
+        };
+        //  convert_pivot(child_id, pivots);
         Self {
             common_data: NodeCommon {
                 root: true,
