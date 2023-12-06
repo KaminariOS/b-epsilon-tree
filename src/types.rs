@@ -55,10 +55,10 @@ macro_rules! SizedOnDiskImplForPrimitive {
             }
 
             fn is_packed() -> Option<usize> {
-                /*     #[cfg(target_endian = "little")]
+                #[cfg(target_endian = "little")]
                 return Some(size_of::<Self>());
 
-                #[cfg(not(target_endian = "little"))]*/
+                #[cfg(not(target_endian = "little"))]
                 return None;
             }
         }

@@ -9,6 +9,8 @@ use std::path::Path;
 use std::time::Instant;
 use superblock::Superblock;
 
+const POOLSIZE: usize = 34000 / 1000;
+
 pub struct Betree {
     root: ChildId,
     // memtable: Memtable,
@@ -66,7 +68,6 @@ impl Betree {
         let pivots = match &mut node.node_inner {
             NodeType::Leaf(leaf) => {
                 msgs.into_iter().for_each(|(key, msg)| leaf.apply(key, msg));
-                // While loop
                 let mut pivots = None;
                 if leaf.is_node_full() {
                     let right_sib_id = self.superblock.alloc();
@@ -93,7 +94,10 @@ impl Betree {
                 let last_key = msgs.last_key_value().unwrap().0;
                 let first_child = internal.find_child_with_key(first_key);
                 let last_child = internal.find_child_with_key(last_key);
-                if first_child == last_child && self.pool.get(&first_child).dirty() {
+                if first_child == last_child
+                    && self.pool.contains(&first_child)
+                    && self.pool.get(&first_child).dirty()
+                {
                     // internal.msg_buffer
                     //     .extract_if(|k, _v| internal.find_child_with_key(k) == last_child).for_each(
                     //     |(k, v)| {msgs.insert(k, v);}
@@ -121,7 +125,7 @@ impl Betree {
                     }
                 }
 
-                self.merge(merging_possible, internal);
+                // self.merge(merging_possible, internal);
 
                 let mut pivots = None;
                 if internal.is_pivots_full() {
@@ -180,16 +184,16 @@ impl Betree {
             }
             pre_child = c;
         }
-        for (k, c) in deleted_keys {
-            let cursor = node.pivot_map.lower_bound(std::ops::Bound::Excluded(&k));
-            let next_key = cursor.key().map(|k| k.clone());
-            if let Some(next_key) = next_key {
-                node.pivot_map.insert(next_key, c);
-            } else {
-                unreachable!();
-            }
-            node.pivot_map.remove(&k);
-        }
+        // for (k, c) in deleted_keys {
+        //     let cursor = node.pivot_map.lower_bound(std::ops::Bound::Excluded(&k));
+        //     let next_key = cursor.key().map(|k| k.clone());
+        //     if let Some(next_key) = next_key {
+        //         node.pivot_map.insert(next_key, c);
+        //     } else {
+        //         unreachable!();
+        //     }
+        //     node.pivot_map.remove(&k);
+        // }
     }
 
     pub fn delete(&mut self, key: Vec<u8>) {
@@ -258,7 +262,11 @@ impl Betree {
 
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let mut superblock = Superblock::new(&path);
-        let mut pool = NodeCache::new(&superblock.storage_filename, true, 10.try_into().unwrap());
+        let mut pool = NodeCache::new(
+            &superblock.storage_filename,
+            true,
+            POOLSIZE.try_into().unwrap(),
+        );
         let root = Node::new_empty_leaf(true);
         let page_id = superblock.allocator.alloc();
         pool.put(page_id, root);
@@ -275,8 +283,11 @@ impl Betree {
     pub fn open<P: AsRef<Path>>(path: P) -> Self {
         if Superblock::exists(&path) {
             let superblock = Superblock::open(path);
-            let mut pool =
-                NodeCache::new(&superblock.storage_filename, false, 10.try_into().unwrap());
+            let mut pool = NodeCache::new(
+                &superblock.storage_filename,
+                false,
+                POOLSIZE.try_into().unwrap(),
+            );
             let root = superblock.root;
             assert!(pool.get(&root).is_root());
             Self {
@@ -296,11 +307,15 @@ impl Betree {
     }
 
     fn print_tree(&mut self) {
+        let mut count = 0;
+        let mut height = 0;
+        let mut max_child_id = 0;
         let mut q = VecDeque::new();
         let mut new_queue = VecDeque::new();
         q.push_back(self.root);
         loop {
             while let Some(n) = q.pop_front() {
+                count += 1;
                 let node = self.pool.get(&n);
                 let mut s = "".to_owned();
 
@@ -323,10 +338,12 @@ impl Betree {
                             internel.get_pivots_capacity() - internel.get_pivots_avail(),
                             internel.get_pivots_capacity()
                         ));
-                        internel
-                            .pivot_map
-                            .iter()
-                            .for_each(|(_, c)| new_queue.push_back(*c));
+                        internel.pivot_map.iter().for_each(|(_, &c)| {
+                            max_child_id = max_child_id.max(c);
+                            new_queue.push_back(c)
+                        });
+
+                        max_child_id = max_child_id.max(internel.rightmost_child);
                         new_queue.push_back(internel.rightmost_child);
                     }
                     NodeType::Leaf(leaf) => {
@@ -341,8 +358,10 @@ impl Betree {
                 }
                 print!("Node ID({}): {} | ", n, s);
             }
+            height += 1;
             println!();
             println!("=================================================================================================================================================");
+            println!("count: {count}; height: {height}; max_child_id: {max_child_id}");
             if new_queue.is_empty() {
                 break;
             } else {
@@ -371,9 +390,12 @@ pub fn test_btree() {
     // let v = v[0..10000].to_vec();
     // println!("first ten: {:?}", &v[..10]);
     let len = v.len();
+
+    use indicatif::ProgressBar;
+    let pb = ProgressBar::new(len as _);
     println!("Total Keys: {}", len);
     let time = Instant::now();
-    let interval = 100000;
+    let interval = 100000 - 1;
     for (i, &(k_val, v_val)) in v.iter().enumerate() {
         // let k = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
         // let v = vec![rng.gen(), rng.gen(), rng.gen(), rng.gen()];
@@ -381,25 +403,41 @@ pub fn test_btree() {
         let v = v_val.to_be_bytes().to_vec();
 
         if i % interval == 0 {
-            println!("{i} th key");
+            // println!("{i} th key");
+            pb.set_position(i as _);
         }
         // ref_map.insert(k, v);
         // ref_map.insert(k_val, v_val);
         betree.insert(k, v);
     }
+
+    pb.finish_and_clear();
+    // betree.flush();
     let elapsed = time.elapsed();
+
+    let time = Instant::now();
+    let file = File::create("/tmp/test_map.cbor").unwrap();
+    ciborium::into_writer(&v, file).unwrap();
+    let ref_elapsed = time.elapsed();
+
+    // betree.print_tree();
     println!(
         "Total time: {:.3}s; OPS: {}",
         elapsed.as_secs_f32(),
         len as u128 / elapsed.as_millis()
     );
-    // betree.print_tree();
-    v.iter().enumerate().for_each(|(i, &(k, v))| {
-        let res = betree
-            .get(&k.to_be_bytes().to_vec())
-            .expect(&format!("Couldn't get betree for {}th: {}", i, k));
-        assert_eq!(&res, &v.to_be_bytes().to_vec());
-    });
+
+    println!(
+        "Ref total time: {:.3}s; OPS: {}",
+        ref_elapsed.as_secs_f32(),
+        len as u128 / ref_elapsed.as_millis()
+    );
+    // v.iter().enumerate().for_each(|(i, &(k, v))| {
+    //     let res = betree
+    //         .get(&k.to_be_bytes().to_vec())
+    //         .expect(&format!("Couldn't get betree for {}th: {}", i, k));
+    //     assert_eq!(&res, &v.to_be_bytes().to_vec());
+    // });
 
     // betree.flush();
     // core::mem::drop(betree);

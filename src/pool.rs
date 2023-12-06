@@ -1,3 +1,4 @@
+use derive_more::Deref;
 use std::collections::HashSet;
 use std::{num::NonZeroUsize, path::Path};
 
@@ -9,7 +10,9 @@ use crate::{
     pager::{PageId, Pager, SimplePager},
 };
 
+#[derive(Deref)]
 pub struct NodeCache {
+    #[deref]
     cache: LruCache<PageId, Node>,
     pager: SimplePager,
     taken: HashSet<PageId>,
@@ -55,6 +58,7 @@ impl NodeCache {
                 .expect(&format!("Failed to page: {}", page_id));
             self.evict_one_if_full();
             let node: Node = page.try_into().unwrap();
+            assert!(!node.dirty());
             self.cache.put(*page_id, node);
             self.cache.get(page_id).unwrap()
         }
