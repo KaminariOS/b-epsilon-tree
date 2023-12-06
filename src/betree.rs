@@ -262,11 +262,12 @@ impl Betree {
     }
 
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
+        let cfg = CFG.get_or_init(|| crate::Args::default());
         let mut superblock = Superblock::new(&path);
         let mut pool = NodeCache::new(
             &superblock.storage_filename,
             true,
-            CFG.get().unwrap().buffer_size.try_into().unwrap(),
+            cfg.buffer_size.try_into().unwrap(),
         );
         let root = Node::new_empty_leaf(true);
         let page_id = superblock.allocator.alloc();
@@ -282,12 +283,13 @@ impl Betree {
     }
 
     pub fn open<P: AsRef<Path>>(path: P) -> Self {
+        let cfg = CFG.get_or_init(|| crate::Args::default());
         if Superblock::exists(&path) {
             let superblock = Superblock::open(path);
             let mut pool = NodeCache::new(
                 &superblock.storage_filename,
                 false,
-                CFG.get().unwrap().buffer_size.try_into().unwrap(),
+                cfg.buffer_size.try_into().unwrap(),
             );
             let root = superblock.root;
             assert!(pool.get(&root).is_root());

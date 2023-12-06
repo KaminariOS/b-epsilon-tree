@@ -1,14 +1,9 @@
-use clap::Parser;
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[derive(Debug)]
 pub struct Args {
     /// ε
-    #[arg(short, long, default_value_t = 0.5)]
     pub eps: f32,
 
     /// buffer size
-    #[arg(short, long, default_value_t = 34)]
     pub buffer_size: usize,
 }
 
