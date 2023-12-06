@@ -63,7 +63,7 @@ impl Superblock {
         deserialize_with_var!(last_checkpoint, u64, src, _cursor);
         deserialize_with_var!(storage_filename, String, src, _cursor);
         deserialize_with_var!(allocator, SimpleAllocator, src, _cursor);
-        println!("root: {}, Deseri: {:?}", root, allocator);
+        info!("root: {}, Deseri: {:?}", root, allocator);
         deserialize_with_var!(wal, Wal, src, _cursor);
         Self {
             root,

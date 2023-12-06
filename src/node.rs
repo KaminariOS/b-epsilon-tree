@@ -1,3 +1,4 @@
+use crate::CFG;
 use crate::types::{MessageData, MessageType, Serializable};
 use core::panic;
 use std::collections::{BTreeMap, HashMap};
@@ -247,7 +248,7 @@ impl InternalNode {
             pivot_map: pivot_map.into(),
             rightmost_child,
             msg_buffer: MsgBufferOnDisk::new(),
-            epsilon: 0.5,
+            epsilon: CFG.get().unwrap().eps,
         }
     }
 
