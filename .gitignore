@@ -7,3 +7,4 @@ flamegraph.svg
 final_report.md
 *.pdf
 *.svg
+*.log

@@ -1,6 +1,7 @@
 use b_epsilon_tree::*;
 
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate log;
 use clap::Parser;
 
 fn main() {

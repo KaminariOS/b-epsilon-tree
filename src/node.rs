@@ -1,5 +1,5 @@
-use crate::CFG;
 use crate::types::{MessageData, MessageType, Serializable};
+use crate::CFG;
 use core::panic;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;

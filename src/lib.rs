@@ -1,7 +1,8 @@
 #![feature(is_sorted)]
 #![feature(btree_cursors)]
 
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate log;
 mod allocator;
 mod mini_allocator;
 
