@@ -59,7 +59,7 @@ impl Pager for SimplePager {
     }
 
     fn flush(&mut self) -> Result<(), Error> {
-        self.file.flush()?;
+        self.file.sync_all()?;
         Ok(())
     }
 }

@@ -1,4 +1,4 @@
-use crate::node::{InternalNode, MsgBuffer, Node, NodeType};
+use crate::node::{InternalNode, MsgBuffer, Node, NodeType, MAX_KEY_SIZE};
 use crate::pool::NodeCache;
 use crate::superblock;
 use crate::types::MessageData;
@@ -28,7 +28,9 @@ impl Betree {
 
     pub fn insert(&mut self, key: Vec<u8>, val: Vec<u8>) {
         // logging here
+
         let key = OnDiskKey::new(key);
+        assert!(key.size() <= MAX_KEY_SIZE);
         let msg_data = MessageData::new(MessageType::Insert, val);
 
         let mut buf = MsgBuffer::new();

@@ -16,7 +16,7 @@ pub type PivotMapOnDisk = BTreeMapOnDisk<OnDiskKey, ChildId>;
 pub type KVOnDisk = BTreeMapOnDisk<OnDiskKey, OnDiskValue>;
 
 // const MAX_MSG_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
-const MAX_KEY_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
+pub const MAX_KEY_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 // const MAX_VAL_SIZE: PageOffset = PAGESIZE as PageOffset / 128;
 
 // type PivotsLength = u16;
@@ -613,20 +613,4 @@ impl TryFrom<&Node> for Page {
         serialize!(value.node_inner, page, _cursor);
         Ok(page)
     }
-}
-
-pub fn convert_pivot(child_id: ChildId, pivots: Vec<(OnDiskKey, ChildId)>) -> (PivotMap, ChildId) {
-    let mut map = PivotMap::new();
-    for i in 0..pivots.len() {
-        map.insert(
-            pivots[i].0.clone(),
-            if i == 0 { child_id } else { pivots[i - 1].1 },
-        );
-    }
-    let right = if pivots.is_empty() {
-        child_id
-    } else {
-        pivots.last().unwrap().1
-    };
-    (map, right)
 }

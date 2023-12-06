@@ -23,6 +23,7 @@ const MAGIC: u64 = 0x12f81ac;
 /// storage_filename
 /// allocator
 /// Wal
+#[allow(dead_code)]
 pub struct Superblock {
     pub root: PageId,
     pub last_flushed_root: PageId,
@@ -85,7 +86,7 @@ impl Superblock {
         self.serialize();
         self.fd.write_all((&self.page).into()).unwrap();
         // flush != fsync, flush only flushes the data from current process to the kernel
-        self.fd.flush().unwrap();
+        self.fd.sync_all().unwrap();
         self.last_flushed_root = self.root;
         Ok(())
     }
